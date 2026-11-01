@@ -1,0 +1,10 @@
+# donnees locales : base SQLite, videos, transcriptions et caches (personnel, jamais sur GitHub)
+data/
+# environnement Python
+.venv/
+__pycache__/
+*.pyc
+# sauvegardes manuelles, cookies Instagram, macOS
+.backup-*/
+cookies.txt
+.DS_Store

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Travelpoint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Karla:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--pine:#1f4a3a;--pine-d:#153429;--pine-l:#e3ece6;--paper:#f6f2e8;--card:#fcfaf4;--line:#ddd5c2;--ink:#1d2a24;--muted:#6a746e;--clay:#b5532f;--clay-l:#f3e2d8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 Karla,system-ui,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+h1{font:600 34px/1 Fraunces,serif;color:var(--pine);margin:0;letter-spacing:-.01em}
+.tag{color:var(--muted);font-size:15px}
+form{display:flex;gap:10px;margin:0 0 14px}
+input[type=url]{flex:1;min-width:0;padding:13px 15px;border:1.5px solid var(--line);border-radius:10px;background:var(--card);font:inherit;color:var(--ink)}
+input[type=url]:focus,.foot textarea:focus{outline:2px solid var(--pine);outline-offset:1px;border-color:var(--pine)}
+button{font:700 15px Karla,sans-serif;cursor:pointer}
+.go{background:var(--pine);color:#fff;border:0;border-radius:10px;padding:0 22px}
+.go:hover{background:var(--pine-d)}
+.job{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 13px;margin-bottom:8px;font-size:14px}
+.job .u{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--muted)}
+.job.err{border-color:#d9b3a2;background:var(--clay-l)}
+.job .msg{color:var(--clay)}
+.spin{width:14px;height:14px;border:2px solid var(--pine-l);border-top-color:var(--pine);border-radius:50%;animation:s 0.9s linear infinite;flex:none}
+@keyframes s{to{transform:rotate(360deg)}}
+.lnk{background:none;border:0;color:var(--pine);text-decoration:underline;padding:0;font-size:13.5px}
+.bar{display:flex;gap:6px;margin:20px 0 14px}
+.tab{background:none;border:1.5px solid var(--line);border-radius:999px;padding:5px 14px;color:var(--muted);font-size:14px}
+.tab.on{background:var(--pine);border-color:var(--pine);color:#fff}
+.layout{display:grid;grid-template-columns:1fr;gap:20px}
+@media(min-width:920px){.layout{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr)}#map{position:sticky;top:16px;height:calc(100vh - 32px)!important}}
+#map{height:260px;border-radius:14px;border:1px solid var(--line);background:var(--pine-l);z-index:0}
+.city{font:600 13px 'IBM Plex Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--pine);margin:22px 0 10px;display:flex;align-items:center;gap:10px}
+.city:first-child{margin-top:0}
+.city:after{content:"";flex:1;height:1px;background:var(--line)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:12px;transition:box-shadow .2s}
+.card.geo{cursor:pointer}
+.leaflet-marker-icon.sel{filter:hue-rotate(150deg) saturate(2.2) drop-shadow(0 0 4px #b5532f)}
+.card.dim{border-style:dashed;background:transparent}
+.card.fait .nm{text-decoration:line-through;text-decoration-color:var(--line)}
+.card.sel{box-shadow:0 0 0 2px var(--pine);background:var(--pine-l)}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.nm{font:600 21px/1.2 Fraunces,serif;margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:12.5px;background:var(--pine-l);color:var(--pine);border-radius:999px;padding:2px 10px}
+.chip.warn{background:var(--clay-l);color:var(--clay)}
+.addr{margin:10px 0 2px;font-size:15px}
+.mono{font:400 12.5px/1.6 'IBM Plex Mono',monospace;color:var(--muted)}
+.prix{margin:8px 0 0;padding:0;list-style:none;font-size:14px}
+.prix li{padding:2px 0;border-bottom:1px dotted var(--line)}
+.links{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0 0;font-size:14px}
+a{color:var(--pine)}
+.foot{display:flex;gap:10px;align-items:flex-start;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.foot label{font-size:14px;white-space:nowrap;display:flex;gap:6px;align-items:center;margin-top:6px}
+textarea{flex:1;resize:vertical;min-height:38px;border:1.5px solid var(--line);border-radius:8px;background:#fff;padding:7px 10px;font:inherit;font-size:14px}
+.x{background:none;border:0;color:var(--muted);font-size:18px;line-height:1;padding:4px}
+.x:hover{color:var(--clay)}
+.edit{border-color:var(--pine)}
+.fg{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:10px}
+.fg label{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--muted)}
+.fg .w{grid-column:1/-1}
+.fg input,.fg textarea{border:1.5px solid var(--line);border-radius:8px;background:#fff;padding:6px 9px;font:inherit;font-size:14.5px;color:var(--ink);min-width:0}
+.fg input:focus{outline:2px solid var(--pine);outline-offset:1px;border-color:var(--pine)}
+.act{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:12px}
+.act .go{padding:8px 18px}
+.add{margin-left:auto;color:var(--pine);border-color:var(--pine)}
+.empty{color:var(--muted);padding:28px 4px;font-size:15px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Travelpoint</h1><span class="tag">Les restaurants vus en vidéo, rangés pour y aller.</span></header>
+  <form id="f"><input id="u" type="url" placeholder="Colle un lien TikTok, Instagram ou YouTube…" required><button class="go">Analyser</button></form>
+  <div id="jobs"></div>
+  <div class="bar" id="tabs"></div>
+  <div class="layout"><div id="list"></div><div id="map"></div></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeUrl=u=>{u=String(u||'');if(/^https?:\/\//i.test(u))return u;if(/^www\./i.test(u))return'https://'+u;return''};
+const DAYS={Mo:'lun',Tu:'mar',We:'mer',Th:'jeu',Fr:'ven',Sa:'sam',Su:'dim',PH:'férié'};
+const frHours=h=>String(h||'').replace(/\b(Mo|Tu|We|Th|Fr|Sa|Su|PH)\b/g,d=>DAYS[d]);
+const errMsg=d=>Array.isArray(d)?d.map(x=>`${(x.loc||[]).slice(1).join('.')} : ${x.msg}`).join('\n'):d||'Erreur';
+const api=(p,o)=>fetch('/api'+p,o).then(r=>r.ok?r.json():r.json().then(e=>Promise.reject(errMsg(e.detail))));
+const send=(p,method,body)=>api(p,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+let places=[],jobs=[],filter='todo',map,layer,markers={},sel=null,lastKey='',editing=null,draft=null,em=null;
+
+function initMap(){
+  if(!window.L)return;
+  map=L.map('map').setView([46.6,2.4],5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  layer=L.layerGroup().addTo(map);
+  map.on('click',e=>{if(editing)setPos(e.latlng.lat,e.latlng.lng)});  // mode edition : un clic place le point
+}
+const shown=()=>places.filter(p=>filter==='all'||(filter==='done')===p.done||p.id===editing);
+const hasPos=p=>p.lat!=null&&p.lat!==''&&p.lon!=null&&p.lon!==''&&isFinite(p.lat)&&isFinite(p.lon);
+function render(){
+  const ae=document.activeElement,af=ae?.dataset?.f,caret=ae?.selectionStart;  // un rechargement ne doit pas faire perdre le champ en cours de saisie
+  const n={todo:places.filter(p=>!p.done).length,done:places.filter(p=>p.done).length,all:places.length};
+  $('#tabs').innerHTML=[['todo','À tester'],['done','Testés'],['all','Tous']].map(([k,t])=>`<button class="tab ${filter===k?'on':''}" data-k="${k}">${t} · ${n[k]}</button>`).join('')+
+    '<button class="tab add" data-add="1">+ Ajouter un restaurant</button>';
+  const list=shown(),byCity={};
+  list.forEach(p=>(byCity[p.ville||'Ville inconnue']??=[]).push(p));
+  $('#list').innerHTML=(editing==='new'?form('new'):'')+(list.length?Object.entries(byCity).map(([c,ps])=>`<div class="city">${esc(c)} · ${ps.length}</div>`+ps.map(p=>p.id===editing?form(p.id):card(p)).join('')).join(''):
+    editing==='new'?'':`<div class="empty">${places.length?'Rien dans cette liste.':'Aucun restaurant pour l’instant. Colle un lien ci-dessus.'}</div>`);
+  if(af){const i=$(`[data-f=${af}]`);i?.focus();try{i.setSelectionRange(caret,caret)}catch{}}
+  if(!map)return;
+  layer.clearLayers();markers={};
+  const pts=list.filter(hasPos);
+  pts.forEach(p=>{
+    if(p.id===editing)return;  // en edition, le point est le marqueur deplacable
+    const m=L.marker([+p.lat,+p.lon]).addTo(layer).bindPopup(`<b>${esc(p.nom)}</b><br>${esc(p.adresse||'')}`);
+    m.on('click',()=>{select(p.id);$('#c-'+p.id)?.scrollIntoView({behavior:'smooth',block:'center'})});markers[p.id]=m;
+  });
+  const key=filter+'|'+places.filter(hasPos).map(p=>`${p.id}@${p.lat},${p.lon}`).sort().join('|');  // onglet ou lieux localises changes (cocher une case ne recadre pas)
+  if(key!==lastKey&&!markers[sel]&&pts.length)map.fitBounds(pts.map(p=>[+p.lat,+p.lon]),{padding:[40,40],maxZoom:15,animate:false});  // jamais avec un restaurant selectionne visible
+  lastKey=key;
+  paintSel(true);syncEm();
+}
+// ---- selection : sel survit aux re-rendus (filtre, note, case a cocher)
+function paintSel(reopen){
+  document.querySelectorAll('.card.sel').forEach(c=>c.classList.remove('sel'));
+  Object.entries(markers).forEach(([id,m])=>{m.getElement()?.classList.toggle('sel',id===sel);m.setZIndexOffset(id===sel?1000:0)});
+  $('#c-'+sel)?.classList.add('sel');
+  if(reopen&&markers[sel]){const pp=markers[sel].getPopup();pp.options.autoPan=false;markers[sel].openPopup();pp.options.autoPan=true}  // sans bouger la carte
+}
+function select(id,pan){
+  sel=id;paintSel();
+  if(pan&&markers[id]){map.setView(markers[id].getLatLng(),Math.max(map.getZoom(),15),{animate:false});markers[id].openPopup()}
+}
+function shortAddr(p){  // "Nom, 17, Rue X, Quartier, Ville, Region, 75002, Pays" -> "17 Rue X, 75002 Ville"
+  let parts=String(p.adresse).split(',').map(x=>x.trim());
+  if(parts.length<4)return p.adresse;
+  if(parts[0].toLowerCase()===String(p.nom||'').toLowerCase()||parts[0]===p.nom_local)parts.shift();
+  const pc=parts.find(x=>/^\d{3,5}(-\d{3,4})?$/.test(x));
+  if(!pc)return parts.slice(0,4).join(', ');
+  const street=/^\d+\w*$/.test(parts[0])?parts[0]+' '+parts[1]:parts[0];
+  return `${street}, ${pc} ${p.ville||''}`.trim();
+}
+function card(p){
+  const cuisine=(p.cuisine||'').split(';').filter(Boolean).map(c=>`<span class="chip">${esc(c.replace(/_/g,' '))}</span>`).join('');
+  const warn=p.confiance==='a_verifier'?'<span class="chip warn">à vérifier</span>':p.confiance==='moyenne'?'<span class="chip warn">probable</span>':p.modifie_manuellement?'<span class="chip">modifié</span>':'';
+  const site=safeUrl(p.site),src=safeUrl(p.url);
+  const dest=p.lat?`${p.lat},${p.lon}`:encodeURIComponent((p.nom||'')+' '+(p.adresse||''));
+  const prix=(p.prix||[]).length?`<ul class="prix">${p.prix.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'';
+  return `<div class="card ${hasPos(p)?'geo':''} ${p.done?'fait':''} ${p.confiance==='a_verifier'?'dim':''}" id="c-${p.id}">
+    <div class="top"><div><h3 class="nm">${esc(p.nom||'Restaurant')}</h3>${p.nom_local?`<div class="mono">${esc(p.nom_local)}</div>`:''}<div class="chips">${warn}${cuisine}</div></div>
+    <button class="x" data-del="${p.id}" title="Supprimer">×</button></div>
+    ${p.adresse?`<div class="addr">${esc(shortAddr(p))}</div>`:''}
+    ${p.horaires?`<div class="mono">${esc(frHours(p.horaires))}</div>`:''}
+    ${prix}
+    <div class="links"><a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${dest}">Itinéraire</a>
+    ${site?`<a target="_blank" rel="noopener" href="${esc(site)}">Site</a>`:''}
+    ${p.tel?`<a href="tel:${esc(p.tel.replace(/[^+\d]/g,''))}">${esc(p.tel)}</a>`:''}
+    ${src?`<a target="_blank" rel="noopener" href="${esc(src)}">Vidéo ↗</a>`:''}
+    ${safeUrl(p.source_web)?`<a target="_blank" rel="noopener" href="${esc(safeUrl(p.source_web))}" title="Page où l’adresse a été trouvée">Source ↗</a>`:''}
+    <button class="lnk" data-edit="${p.id}">Modifier</button>${['a_verifier','moyenne'].includes(p.confiance)?`<button class="lnk" data-ok="${p.id}">C’est bon</button>`:''}</div>
+    <div class="foot"><label><input type="checkbox" data-done="${p.id}" ${p.done?'checked':''}> J’y suis allé</label>
+    <textarea data-note="${p.id}" rows="1" maxlength="2000" placeholder="Note perso…">${esc(p.note)}</textarea></div></div>`;
+}
+// ---- modification manuelle
+const FIELDS=[['nom','Nom'],['adresse','Adresse','w'],['ville','Ville'],['pays','Pays'],['cuisine','Cuisine'],['tel','Téléphone'],['site','Site (https://…)','w'],['horaires','Horaires','w'],['lat','Latitude'],['lon','Longitude']];
+function form(id){
+  const f=([k,t,w])=>`<label class="${w||''}">${t}<input data-f="${k}" value="${esc(draft[k])}" ${k==='lat'||k==='lon'?'inputmode="decimal"':''}></label>`;
+  return `<div class="card edit" id="c-${id}"><h3 class="nm">${id==='new'?'Nouveau restaurant':'Modifier la fiche'}</h3>
+    <div class="fg">${FIELDS.map(f).join('')}<label class="w">Prix (un par ligne)<textarea data-f="prix" rows="3">${esc(draft.prix)}</textarea></label></div>
+    <div class="act"><button class="lnk" data-geo="1">Chercher cette adresse</button><span class="mono">ou clique sur la carte / déplace le marqueur</span></div>
+    <div class="act"><button class="go" data-save="1">Enregistrer</button><button class="lnk" data-cancel="1">Annuler</button></div></div>`;
+}
+function startEdit(id){
+  const p=id==='new'?{}:places.find(x=>x.id===id);if(!p)return;
+  editing=id;draft={prix:(p.prix||[]).join('\n')};
+  FIELDS.forEach(([k])=>draft[k]=String(p[k]??''));
+  render();
+  if(map&&hasPos(p))map.setView([+p.lat,+p.lon],Math.max(map.getZoom(),15),{animate:false});
+  $('#c-'+id)?.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function stopEdit(){editing=draft=null;render()}
+function syncEm(){  // marqueur deplacable = latitude/longitude du formulaire
+  const la=parseFloat(String(draft?.lat).replace(',','.')),lo=parseFloat(String(draft?.lon).replace(',','.'));
+  if(!map||!editing||!(Math.abs(la)<=90&&Math.abs(lo)<=180)){em?.remove();em=null;return}
+  if(em)em.setLatLng([la,lo]);
+  else{em=L.marker([la,lo],{draggable:true,zIndexOffset:2000}).addTo(map);em.on('dragend',()=>setPos(em.getLatLng().lat,em.getLatLng().lng))}
+}
+function setPos(la,lo){
+  draft.lat=la.toFixed(6);draft.lon=lo.toFixed(6);
+  ['lat','lon'].forEach(k=>{const i=$(`[data-f=${k}]`);if(i)i.value=draft[k]});
+  syncEm();
+}
+function payload(){
+  const num=(v,t)=>{v=String(v).trim().replace(',','.');if(!v)return null;if(!isFinite(v))throw t+' invalide';return +v};
+  return {...Object.fromEntries(FIELDS.filter(([k])=>k!=='lat'&&k!=='lon').map(([k])=>[k,draft[k].trim()])),
+    prix:draft.prix.split('\n').map(x=>x.trim()).filter(Boolean),lat:num(draft.lat,'Latitude'),lon:num(draft.lon,'Longitude')};
+}
+async function save(){
+  let id=editing;
+  try{
+    const body=payload();
+    if(id==='new')id=(await send('/places','POST',body)).id;else await send('/places/'+id,'PATCH',body);
+  }catch(err){return alert(err)}
+  editing=draft=null;sel=id;await load();select(id,true);
+}
+async function geocode(btn){
+  const a=draft.adresse.trim();if(!a)return alert('Saisis d’abord une adresse.');
+  const q=[a,draft.ville,draft.pays].filter(x=>x&&x.trim()&&!a.toLowerCase().includes(x.trim().toLowerCase())).reduce((s,x)=>s+', '+x.trim(),a);
+  btn.disabled=true;btn.textContent='Recherche…';
+  try{
+    const g=await send('/geocode','POST',{adresse:q});
+    setPos(g.lat,g.lon);map?.setView([g.lat,g.lon],Math.max(map.getZoom(),15),{animate:false});
+    ['ville','pays'].forEach(k=>{if(!draft[k].trim()&&g[k]){draft[k]=g[k];$(`[data-f=${k}]`).value=g[k]}});
+  }catch(err){alert(err)}
+  btn.disabled=false;btn.textContent='Chercher cette adresse';
+}
+function renderJobs(){
+  const act=jobs.filter(j=>j.status!=='done'||Date.now()/1000-j.created<20);
+  $('#jobs').innerHTML=act.map(j=>j.status==='error'
+    ?`<div class="job err"><div class="u">${esc(j.url)}</div><span class="msg">${esc(j.error)}</span><button class="lnk" data-retry="${esc(j.url)}">Réessayer</button><button class="lnk" data-close="${j.id}">Fermer</button></div>`
+    :j.status==='done'?`<div class="job"><div class="u">${esc(j.url)}</div><span>✓ ${esc(j.step)}</span></div>`
+    :`<div class="job"><span class="spin"></span><div class="u">${esc(j.url)}</div><span>${esc(j.step)}</span></div>`).join('');
+}
+async function load(){places=await api('/places');render()}
+let busy=false;
+async function poll(){
+  try{
+    const prev=jobs.filter(j=>j.status==='running'||j.status==='queued').length;
+    jobs=await api('/jobs');renderJobs();
+    const now=jobs.filter(j=>j.status==='running'||j.status==='queued').length;
+    if(prev&&now<prev)await load();
+  }catch(e){}
+}
+$('#f').onsubmit=async e=>{
+  e.preventDefault();const u=$('#u').value.trim();if(!u)return;
+  try{const r=await send('/analyze','POST',{url:u});
+    $('#u').value='';await poll();await load();
+    if(r.deja){
+      if(r.statut!=='done')return alert('Cette vidéo est déjà en cours d’analyse.');
+      if(r.lieux.length){filter='all';render();select(r.lieux[0],true);$('#c-'+r.lieux[0])?.scrollIntoView({behavior:'smooth',block:'center'})}
+      const msg=r.lieux.length?`Vidéo déjà analysée : ${r.lieux.length} restaurant(s) dans ta liste. Aucune IA relancée.`:'Vidéo déjà analysée : aucun restaurant trouvé (ou tu les as supprimés).';
+      if(confirm(msg+'\n\nOK = réanalyser quand même (tes fiches modifiées, testées ou annotées sont conservées)\nAnnuler = ne rien faire')){await send('/analyze','POST',{url:u,force:true});await poll()}
+    }
+  }catch(err){alert(err)}
+};
+document.addEventListener('click',async e=>{
+  const t=e.target,d=t.dataset;
+  if(d.k){filter=d.k;render()}
+  if(d.add)startEdit('new');
+  if(d.edit)startEdit(d.edit);
+  if(d.cancel)stopEdit();
+  if(d.save)await save();
+  if(d.geo)await geocode(t);
+  if(d.ok){await send('/places/'+d.ok,'PATCH',{verifie:true});await load()}
+  if(d.del&&confirm('Supprimer ce restaurant ?')){if(sel===d.del)sel=null;if(editing===d.del)editing=draft=null;await api('/places/'+d.del,{method:'DELETE'});await load()}
+  if(d.retry){await send('/analyze','POST',{url:d.retry});await poll()}
+  if(d.close){await api('/jobs/'+d.close,{method:'DELETE'});await poll()}
+  const c=t.closest('.card.geo');  // clic sur la fiche (hors liens, boutons, case, note) = selection
+  if(c&&!t.closest('a,button,input,textarea,label,.edit')&&markers[c.id.slice(2)])select(c.id.slice(2),true);
+});
+document.addEventListener('input',e=>{
+  const k=e.target.dataset.f;
+  if(k&&draft){draft[k]=e.target.value;if(k==='lat'||k==='lon')syncEm()}
+});
+document.addEventListener('change',async e=>{
+  const t=e.target;
+  if(t.dataset.done){await send('/places/'+t.dataset.done,'PATCH',{done:t.checked});await load()}
+  if(t.dataset.note)await send('/places/'+t.dataset.note,'PATCH',{note:t.value});
+});
+initMap();load();poll();setInterval(poll,2500);
+</script>
+</body>
+</html>
