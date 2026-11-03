@@ -1,0 +1,12 @@
+# Modeles OpenRouter essayes DANS L'ORDRE (TP_LLM=openrouter) : si l'un echoue (erreur, quota,
+# reponse vide ou illisible), on passe au suivant. Une ligne par modele ; # = commentaire.
+# Pour la lecture de la VIDEO, les modeles qui ne lisent pas les images sont sautes automatiquement.
+# Remplace la liste par le classement de bench/modeles.py une fois le banc lance.
+# Classement du banc du 2026-11-03
+nvidia/nemotron-3.5-super-vl:free
+cohere/north-mini-code:free
+nvidia/nemotron-3-ultra-550b-a55b:free
+dots-studio/dots-3-note-preview:free
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+xingchen-agi/xing4.0-29b-a4b:free
+openrouter/free

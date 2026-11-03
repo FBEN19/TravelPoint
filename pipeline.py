@@ -2,7 +2,7 @@
 Texte d'abord (legende + OpenStreetMap), video (Whisper + Qwen3-VL via MLX) seulement si besoin.
 Tout tourne en local ; un dossier de travail par lien (cache) dans data/jobs/<hash>/.
 """
-import difflib, hashlib, json, os, pathlib, re, subprocess, sys, threading, time, unicodedata, urllib.parse, urllib.request
+import base64, difflib, hashlib, json, os, pathlib, re, subprocess, sys, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 
 BIN = pathlib.Path(sys.executable).parent  # binaires du venv (yt-dlp, mlx_whisper)
 os.environ["PATH"] += os.pathsep + "/opt/homebrew/bin" + os.pathsep + "/usr/local/bin"  # ffmpeg (brew)
@@ -15,6 +15,18 @@ GENERIC = {"fyp", "foryou", "pourtoi", "viral", "reels", "reel", "voyage", "trav
            "instagram", "tiktok", "explore", "resto", "restaurant", "bonplan", "bonsplans"}
 FOOD = {"restaurant", "fast_food", "cafe", "bar", "pub", "food_court", "biergarten", "ice_cream"}
 FOOD_SHOP = {"bakery", "pastry", "confectionery", "deli", "chocolate"}
+
+
+TRACE = [None]  # fichier de trace de l'analyse en cours (reponses de l'IA, recherches OSM et web) : pour comprendre un echec
+
+
+def trace(kind, **data):
+    if TRACE[0]:
+        try:
+            with open(TRACE[0], "a") as f:
+                f.write(json.dumps({"t": kind, **data}, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            pass
 
 
 def run(cmd, **k):
@@ -108,7 +120,8 @@ def scrub(text, skip):  # retire les lignes qui citent @compte et les #compte (n
 def candidates(text, skip=()):
     c = re.findall(r"\b((?:[A-ZÀ-Ý][a-zà-ÿ'’\-]+[^\S\r\n])+[A-ZÀ-Ý][a-zà-ÿ'’\-]+)\b", text)  # un nom ne passe pas a la ligne
     c += [re.sub(r"(?<=[a-zà-ÿ])(?=[A-Z])", " ", h) for h in re.findall(r"#(\w+)", text) if h.lower() not in GENERIC]
-    return list(dict.fromkeys(x.strip() for x in c if x.lower() not in GENERIC and nz(x) not in skip))
+    return list(dict.fromkeys(x.strip() for x in c if x.lower() not in GENERIC and nz(x) not in skip
+                              and not re.match(rf"(?i)(?:{TYPES})\b", x.strip())))  # « Rue Saint Martin » : une rue, pas un nom
 
 
 def handle_of(text, skip):
@@ -166,8 +179,9 @@ def pin_blocks(text, cands, skip=()):
             t = re.sub(r"^[^\w€$£¥«“\"(]+", "", l2).strip()  # retire puces et emojis en debut de ligne
             if t and not CREDIT.search(t):
                 body.append(t[:200])
-        out.append({"nom": name_from_handle(h, cands) or pretty(h), "handle": h, "prix": body[:8],
-                    "adresse": next(iter(STREET.findall("\n".join(body))), None)})
+        adrs = list(dict.fromkeys(a.strip(" ,;.-–") for l in body for a in STREET.findall(l)))
+        prix = [l for l in body if nz(l) not in {nz(a) for a in adrs}]  # une ligne qui n'est qu'une adresse n'est pas une offre
+        out.append({"nom": name_from_handle(h, cands) or pretty(h), "handle": h, "prix": prix[:8], "adresses": adrs})
     return out
 
 
@@ -198,12 +212,24 @@ def nz(t):  # comparaison de noms : sans accents, sans casse ni ponctuation (gar
     return re.sub(r"[\W_]+", "", "".join(c for c in t if not unicodedata.combining(c)))
 
 
+GENERIQUES_NOM = {"le", "la", "les", "l", "the", "chez", "au", "aux", "de", "du", "des", "restaurant", "resto", "bar", "cafe", "brasserie",
+                  "bistrot", "ramen", "sushi", "pizza", "pizzeria", "burger", "boulangerie", "officiel", "paris", "marseille", "lyon", "lille",
+                  "bordeaux", "nice", "toulouse", "nantes", "bruxelles", "tokyo", "osaka", "london", "londres"}
+
+
 def sim(a, b):
-    a, b = nz(a), nz(b)
+    """Ressemblance de deux noms (0 a 1). Un nom contenu dans l'autre compte si c'est l'essentiel du nom
+    (« Hanbei » / « Le Hanbei », « Holyburek » / « Holyburek Paris »), pas s'il n'en est qu'un morceau (« Honoré » / « Maison Saint Honoré »)."""
+    ra, rb = a or "", b or ""
+    a, b = nz(ra), nz(rb)
     if not a or not b:
         return 0.0
     if min(len(a), len(b)) >= 4 and (a in b or b in a):
-        return 0.9
+        (court, rc), (long_, rl) = sorted(((a, ra), (b, rb)), key=lambda x: len(x[0]))
+        mots = lambda s: [nz(w) for w in re.findall(r"[\wÀ-ÿ]+", s) if nz(w)]
+        reste = [w for w in mots(rl) if w not in mots(rc)]
+        if len(court) / len(long_) > 0.5 or all(w in GENERIQUES_NOM for w in reste):
+            return 0.9
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
@@ -221,6 +247,7 @@ def nominatim(params):
             if DEBUG: print("  [osm] erreur", e)
         _nlast[0] = time.monotonic()
     if DEBUG: print(f"  [osm] {q[:140]} -> {[x.get('display_name', '')[:50] for x in r][:3]}")
+    trace("osm", q=params.get("q"), zone=params.get("viewbox"), resultats=[x.get("display_name", "")[:80] for x in r][:5])
     return r
 
 
@@ -241,18 +268,21 @@ def geocode(addr):
     n = norm_addr(addr).replace("〒", " ").strip()
     parts = [p.strip() for p in n.split(",") if p.strip()]
     tries = [n, re.sub(r"^\d+[\w-]*\s*,?\s*", "", n)]                                  # sans numero de rue
+    tries.insert(1, re.sub(r"(?i)\s*\b\d{1,2}\s*(?:e|è|ème|eme|er)\b(?:\s*arr\w*)?\s*$", "", n))  # sans « 16E » / « 2e arrondissement » final
     tries += [", ".join(parts[-3:]), ", ".join(parts[-2:])] if len(parts) > 2 else []        # quartier + ville + pays
     tries.append(re.sub(r"[\d０-９\-－ー−丁目番地号\s]+$", "", n))                               # adresses japonaises : sans le numero final
     for q in dict.fromkeys(t for t in tries if len(t) > 2):
         r = nominatim({"q": q, "limit": 1, "addressdetails": 1})
         if r:
             a = r[0].get("address", {})
-            return {"lat": float(r[0]["lat"]), "lon": float(r[0]["lon"]), "ville": place_city(a), "pays": a.get("country"), "precis": q == n}
+            return {"lat": float(r[0]["lat"]), "lon": float(r[0]["lon"]), "ville": place_city(a), "pays": a.get("country"), "precis": q == n or bool(re.match(r"\s*\d", q))}
     return None
 
 
 def osm(name, near=None, hint="", pays=""):
     """Etablissement de restauration nomme `name`, cherche DANS UNE ZONE : near=(lat, lon, demi-cote en degres) ou ville `hint`."""
+    if name and not [w for w in re.findall(r"[\wÀ-ÿ'’]+", name) if len(nz(w)) >= 3 and nz(w) not in MOTS_GENERIQUES]:
+        name = None  # « Sushi », « Restaurant » : pas un nom ; seul le restaurant unique a une adresse precise compte
     p = {"q": name, "addressdetails": 1, "extratags": 1, "namedetails": 1, "limit": 10}
     if not near and hint:
         g = geocode(f"{hint}, {pays}" if pays else hint)
@@ -261,8 +291,10 @@ def osm(name, near=None, hint="", pays=""):
         la, lo, d = near
         p.update(viewbox=f"{lo - d},{la + d},{lo + d},{la - d}", bounded=1)
     is_food = lambda r: r.get("type") in FOOD or (r.get("class") == "shop" and r.get("type") in FOOD_SHOP)
+    if not name and not (near and near[2] <= 0.002):
+        return None  # nom inconnu : on ne peut chercher qu'a une adresse precise
     best = None
-    for r in nominatim(p):
+    for r in (nominatim(p) if name else []):
         if not is_food(r):
             continue  # pas un lieu de restauration
         names = [r.get("name", "")] + list((r.get("namedetails") or {}).values())  # nom local + name:en, name:ja, alt_name...
@@ -309,41 +341,257 @@ def at_address(nom, addr, g, **k):
     return fiche(nom=nom, adresse=addr, ville=g.get("ville") or ville, pays=g.get("pays") or pays, lat=g.get("lat"), lon=g.get("lon"), confiance="a_verifier", **k)
 
 
-def expand(nom, hint, pays, speech):
-    """Nom prononce coupe par le modele ('bouillon') : on essaie avec les 1-2 mots precedents ('comme un bouillon')."""
+def ecrit(nom, texte):
+    """Le nom figure-t-il dans le texte, a l'orthographe pres ? (anti-invention tolerant aux fautes de transcription)"""
+    if nz(nom) and nz(nom) in nz(texte):
+        return True
+    words, n = re.findall(r"[\wÀ-ÿ'’]+", texte), len(nom.split())
+    return any(sim(nom, " ".join(words[i:i + k])) >= 0.85 for k in (n, n + 1) for i in range(len(words) - k + 1))
+
+
+def variantes(nom, speech):
+    """Nom entendu d'un seul mot, souvent coupe par l'IA ('bouillon') -> noms plus longs pris dans la transcription ('comme un bouillon', 'un bouillon')."""
     words = re.findall(r"[\wÀ-ÿ'’]+", speech)
     low, nw = [w.lower() for w in words], nom.lower().split()
+    if len(nw) != 1:
+        return []
     for i in range(len(low) - len(nw) + 1):
         if low[i:i + len(nw)] == nw:
-            for back in (2, 1):
-                if i - back >= 0:
-                    r = osm(" ".join(words[i - back:i + len(nw)]), hint=hint, pays=pays)
-                    if r:
-                        return r
-            break
-    return None
+            return [" ".join(words[i - k:i + len(nw)]) for k in (2, 1) if i - k >= 0]
+    return []
 
 
 # ---------- video : Whisper + Qwen3-VL ----------
-def ask(prompt, *extra, tokens=300):
-    r = run([sys.executable, "-m", "mlx_vlm.generate", "--model", VLM, *extra, "--max-tokens", str(tokens), "--temperature", "0", "--prompt", prompt])
-    if DEBUG:
-        print("  [llm]", r.stdout[-900:])
-    m = re.search(r"\[\s*\{.*\}\s*\]", r.stdout, re.S)
+# ---------- IA : OpenRouter (modeles gratuits, en ligne) ou Qwen3-VL local (MLX) ----------
+OR_URL = "https://openrouter.ai/api/v1/chat/completions"
+STATS = {"openrouter": 0, "repli": 0, "local": 0, "quota_jour": 0}  # combien de lectures par chaque IA (affiche par le banc)
+
+
+def or_cle():
+    """Cle OpenRouter : variable OPENROUTER_API_KEY, ou fichier data/openrouter.key (jamais versionne : data/ est ignore par git)."""
+    fichiers = [DATA / "openrouter.key", pathlib.Path(__file__).resolve().parent / "data" / "openrouter.key"]  # (le banc a son propre dossier data)
+    return os.environ.get("OPENROUTER_API_KEY", "").strip() or next((f.read_text().strip() for f in fichiers if f.exists()), "")
+
+
+def or_modeles():
+    """Ordre d'essai : TP_OR_MODELES=m1,m2 si defini, sinon modeles_openrouter.txt (une ligne par modele), sinon le routeur gratuit."""
+    if os.environ.get("TP_OR_MODELES"):
+        return [m.strip() for m in os.environ["TP_OR_MODELES"].split(",") if m.strip()]
+    f = pathlib.Path(__file__).resolve().parent / "modeles_openrouter.txt"
+    lignes = [l.split("#")[0].strip() for l in f.read_text().splitlines()] if f.exists() else []
+    return [l for l in lignes if l] or ["openrouter/free"]
+
+
+STATS_MODELES = {}  # par modele : appels, ok, vides, illisibles, erreurs, quota, sautes (pas d'images), secondes (des reponses ok)
+_or_pause = {}  # modele -> instant ou il redevient utilisable (apres un 429 : limite par minute)
+OR_INFOS = DATA / "openrouter_modeles.json"  # ce que chaque modele sait lire, demande a OpenRouter une fois par jour
+
+
+def st_modele(m):
+    return STATS_MODELES.setdefault(m, {"appels": 0, "ok": 0, "vides": 0, "illisibles": 0, "erreurs": 0, "quota": 0, "sautes": 0, "secondes": 0.0, "derniere_erreur": ""})
+
+
+def lit_images(m):
+    """True / False selon OpenRouter ; None si on ne sait pas (liste injoignable, modele inconnu, routeur) : on essaie quand meme."""
+    try:
+        if not OR_INFOS.exists() or time.time() - OR_INFOS.stat().st_mtime > 86400:
+            rep = json.loads(urllib.request.urlopen(urllib.request.Request("https://openrouter.ai/api/v1/models", headers=UA), timeout=20).read())
+            infos = {x["id"]: (x.get("architecture") or {}).get("input_modalities") or [] for x in rep.get("data", []) if x.get("id")}
+            OR_INFOS.parent.mkdir(parents=True, exist_ok=True)
+            OR_INFOS.write_text(json.dumps(infos))
+        infos = json.loads(OR_INFOS.read_text())
+    except Exception:  # noqa
+        return None
+    return ("image" in infos[m]) if m in infos else None
+
+
+def images_video(video, n=12):
+    """n images reparties sur TOUTE la video (480 px de large), en base64 ; gardees en cache a cote de la video."""
+    d = pathlib.Path(video).parent / "images"
+    if not d.exists() or not any(d.glob("*.jpg")):
+        d.mkdir(exist_ok=True)
+        dur = float(run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", video]).stdout.strip() or 30)
+        run(["ffmpeg", "-y", "-loglevel", "error", "-i", video, "-vf", f"fps={n / max(dur, 1):.4f},scale=480:-2", "-frames:v", str(n), "-q:v", "5", d / "%02d.jpg"])
+    return [base64.b64encode(p.read_bytes()).decode() for p in sorted(d.glob("*.jpg"))][:n]
+
+
+def or_envoyer(req):
+    """Un appel -> (reponse, secondes). Avec TP_OR_ATTENTE=1 (banc des modeles), une limite PAR MINUTE (429) fait attendre
+    puis reessayer le meme modele au lieu de passer au suivant : chaque modele est juge sur ses reponses, pas sur la file d'attente."""
+    for n in range(4):
+        t0 = time.monotonic()
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=180).read()), time.monotonic() - t0
+        except urllib.error.HTTPError as e:
+            try:
+                e.corps = e.read().decode(errors="ignore")[:300]
+            except Exception:  # noqa
+                e.corps = ""
+            if e.code != 429 or os.environ.get("TP_OR_ATTENTE") != "1" or re.search(r"(?i)per.?day|daily", e.corps) or n == 3:
+                raise
+            time.sleep(20 * (n + 1))
+
+
+def ask_openrouter(prompt, extra, tokens):
+    """Meme consigne qu'en local ; une video est envoyee sous forme d'images. Renvoie (texte, modele qui a repondu)."""
+    contenu, extra = [{"type": "text", "text": prompt}], [str(x) for x in extra]
+    if "--video" in extra:
+        n = int(extra[extra.index("--video-max-frames") + 1]) if "--video-max-frames" in extra else 12
+        contenu += [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b}} for b in images_video(extra[extra.index("--video") + 1], min(n, 12))]
+    erreurs, images = [], "--video" in extra
+    for m in or_modeles():  # un par un : on passe au suivant sur une erreur, un quota, une reponse vide ou illisible
+        st = st_modele(m)
+        if images and lit_images(m) is False:
+            st["sautes"] += 1
+            erreurs.append(f"{m} : ne lit pas les images")
+            continue
+        if _or_pause.get(m, 0) > time.monotonic() and os.environ.get("TP_OR_ATTENTE") != "1":  # le banc, lui, reessaie toujours
+            erreurs.append(f"{m} : en pause (limite par minute)")
+            continue
+        corps = {"model": m, "messages": [{"role": "user", "content": contenu}], "temperature": 0,
+                 "max_tokens": max(tokens * 4, 2000),  # les modeles qui « reflechissent » ont besoin de place (gratuit)
+                 "reasoning": {"effort": "low"}}
+        req = urllib.request.Request(OR_URL, data=json.dumps(corps).encode(), method="POST",
+                                     headers={"Authorization": f"Bearer {or_cle()}", "Content-Type": "application/json", "X-Title": "Travelpoint"})
+        st["appels"] += 1
+        try:
+            rep, duree = or_envoyer(req)
+        except urllib.error.HTTPError as e:
+            corps_err = getattr(e, "corps", "")
+            if e.code == 429:
+                st["quota"] += 1
+                _or_pause[m] = time.monotonic() + 60
+                if re.search(r"(?i)per.?day|daily", corps_err):
+                    STATS["quota_jour"] = 1  # quota du jour epuise : le banc des modeles s'arrete
+            else:
+                st["erreurs"] += 1
+            erreurs.append(f"{m} : HTTP {e.code} {corps_err[:100]}".strip())
+            st["derniere_erreur"] = f"HTTP {e.code} {corps_err[:150]}".strip()
+            continue
+        except Exception as e:  # noqa : reseau, delai depasse...
+            st["erreurs"] += 1
+            erreurs.append(f"{m} : {e}")
+            st["derniere_erreur"] = str(e)[:150]
+            continue
+        if rep.get("error"):
+            st["erreurs"] += 1
+            erreurs.append(f"{m} : {str(rep['error'])[:120]}")
+            st["derniere_erreur"] = str(rep["error"])[:150]
+            continue
+        choix = (rep.get("choices") or [{}])[0]
+        texte = (choix.get("message") or {}).get("content") or ""
+        if not texte.strip():
+            st["vides"] += 1
+            erreurs.append(f"{m} : reponse vide ({choix.get('finish_reason')})")  # toute la place prise par la reflexion
+            continue
+        if json_ok(texte) is None:
+            st["derniere_erreur"] = f"sans JSON : {texte.strip()[:80]}"
+            st["illisibles"] += 1
+            erreurs.append(f"{m} : reponse illisible ({texte.strip()[:60]!r})")
+            continue
+        st["ok"] += 1
+        st["secondes"] += duree
+        return texte, rep.get("model", m)
+    raise RuntimeError("; ".join(erreurs)[:400] or "aucun modele")
+
+
+def json_ok(texte):
+    """La liste JSON demandee, ou None si la reponse n'en contient pas (bavardage, JSON casse). [] = « aucun restaurant », une vraie reponse."""
+    t = re.sub(r"```(?:json)?", "", texte or "")
+    for m in re.finditer(r"\[", t):
+        fin = t.rfind("]")
+        while fin > m.start():
+            try:
+                v = json.loads(t[m.start():fin + 1])
+                if isinstance(v, list) and all(isinstance(x, dict) for x in v):
+                    return v
+                break
+            except json.JSONDecodeError:
+                fin = t.rfind("]", m.start(), fin)
+    return None
+
+
+def json_list(texte):
+    m = re.search(r"\[\s*\{.*\}\s*\]", texte or "", re.S)
     try:
         return json.loads(m.group(0)) if m else []
     except json.JSONDecodeError:
         return []
 
 
+def ask(prompt, *extra, tokens=300):
+    """Lecture par l'IA -> liste JSON. TP_LLM=openrouter (et une cle) : OpenRouter, avec repli sur l'IA locale s'il est sature ou en panne."""
+    if os.environ.get("TP_LLM") == "openrouter" and or_cle():
+        try:
+            texte, modele = ask_openrouter(prompt, extra, tokens)
+            STATS["openrouter"] += 1
+            if DEBUG:
+                print(f"  [llm openrouter:{modele}]", texte[-900:])
+            trace("llm", consigne=prompt[:200], images=bool(extra), reponse=texte[-1500:], via=f"openrouter:{modele}")
+            return json_ok(texte) or []
+        except Exception as e:  # noqa : quota (429), panne, reseau... -> IA locale
+            STATS["repli"] += 1
+            trace("llm_repli", raison=str(e)[:300])
+            if DEBUG:
+                print("  [llm] OpenRouter indisponible, repli sur l'IA locale :", e)
+            if os.environ.get("TP_OR_REPLI") == "0":
+                raise RuntimeError(f"OpenRouter indisponible : {e}")
+    r = run([sys.executable, "-m", "mlx_vlm.generate", "--model", VLM, *extra, "--max-tokens", str(tokens), "--temperature", "0", "--prompt", prompt])
+    STATS["local"] += 1
+    if DEBUG:
+        print("  [llm]", r.stdout[-900:])
+    trace("llm", consigne=prompt[:200], images=bool(extra), reponse=r.stdout[-1500:], via="local")
+    return json_list(r.stdout)
+
+
 LLM_PROMPT = ("Voici la legende d'une video de reseau social (format libre : emojis, @pseudos, hashtags, publicites...). "
-              "Releve les restaurants, cafes, bars ou boulangeries dont elle parle. Pour chacun : "
+              "Releve les restaurants, cafes, bars ou boulangeries que la video PRESENTE (pas ceux cites en passant, comme les autres restaurants d'un chef). Pour chacun : "
               '"nom" (tel qu\'ecrit ; un @pseudo place a cote d\'un lieu est en general le nom de l\'etablissement), '
-              '"adresse" (complete, si elle est ecrite), "ville", "pays", "offres" (les lignes de prix ou d\'offres qui le concernent, '
+              '"adresses" (liste : TOUTES ses adresses completes ecrites dans le texte, une par element ; [] si aucune), "ville", "pays", '
+              '"offres" (les lignes de prix ou d\'offres qui le concernent, '
               'recopiees telles quelles) et "horaires". '
-              "Ignore : le compte qui publie, les applis ou marques qui font de la promotion, les gagnants de concours, les abonnements. "
+              "Ignore : le compte qui publie, les applis ou marques qui font de la promotion, les gagnants de concours, les abonnements, "
+              "et les PERSONNES (chef, influenceur, invite, createur de la video) : une personne n'est jamais un etablissement. "
               "N'invente rien : si une information n'est pas ecrite dans le texte, laisse-la vide. "
-              'Reponds uniquement en JSON : [{"nom":"","adresse":"","ville":"","pays":"","offres":[""],"horaires":""}] ou [] si aucun.\n\nLEGENDE :\n')
+              'Reponds uniquement en JSON : [{"nom":"","adresses":[""],"ville":"","pays":"","offres":[""],"horaires":""}] ou [] si aucun.\n\nLEGENDE :\n')
+
+
+def vraie_adresse(a):
+    """« 12 rue X », « Rue X 31, 1050 Ixelles », « 1-22 Ikutamae », un code postal : oui. « MARSEILLE », « pres d'Opera », « Nakameguro » : non."""
+    a = (a or "").strip()
+    if not a or re.match(r"(?i)(pr[eè]s|[aà] c[oô]t[eé]|vers|en face|quartier|dans le|au c(?:oe|œ)ur|non loin)\b", a):
+        return False
+    return bool(STREET.search(a) or re.search(r"(?<!\d)\d{1,4}\s*[-‐]\s*\d{1,4}(?!\d)", a) or re.search(r"(?<!\d)\d{4,6}(?!\d)", a))
+
+
+PERSONNE = (r"(?:l['’]\s*adresse|les\s+adresses|le\s+resto|le\s+restaurant|le\s+spot|la\s+table|le\s+qg|la\s+cantine|chef|cheffe|"
+            r"invite|invitee|createur|creatrice|fondateur|fondatrice|proprietaire|par)")
+
+
+def personne(nom, texte):
+    """« L'adresse de Camille Lavabre », « par le chef Benjamin Mathieu » : une personne, pas un etablissement."""
+    if not nom or not re.fullmatch(r"[A-ZÀ-Ý][\w'’-]+(?:\s+[A-ZÀ-Ý][\w'’-]+){1,2}", nom.strip()):
+        return False  # seulement « Prenom Nom »
+    if re.match(r"(?i)(?:le|la|les|l['’]|chez|the|el|il|au|aux)\b", nom.strip()):
+        return False  # « Le Vaudesir », « Chez Paul » : des etablissements
+    sa = lambda s: "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c)).lower()
+    return bool(re.search(rf"\b{PERSONNE}\s+(?:de\s+|d['’]\s*|du\s+|(?:le|la)\s+chef(?:fe)?\s+)?{re.escape(sa(nom.strip()))}\b", sa(texte)))
+
+
+def nom_descriptif(n):
+    """« Le resto japonais le plus immersif de Bordeaux » : une phrase d'accroche, pas le nom d'un etablissement."""
+    return len(n.split()) >= 6 or bool(re.search(r"(?i)\b(?:le|la|les)\s+(?:plus|meilleure?s?)\b|\bmeilleure?s?\b|\bincroyables?\b", n))
+
+
+def split_addrs(values):
+    """["63 Rue A, Paris\n- 50 Rue B, Paris", ...] -> ["63 Rue A, Paris", "50 Rue B, Paris"] (une enseigne peut avoir plusieurs adresses)."""
+    out = {}
+    for v in values if isinstance(values, list) else [values]:
+        for part in re.split(r"\n|;|\s[|/]\s", v if isinstance(v, str) else ""):
+            part = part.strip(" -•·*\t")
+            if len(nz(part)) >= 6:
+                out.setdefault(nz(part), part)
+    return list(out.values())
 
 
 def llm_extract(text, skip=()):
@@ -355,20 +603,41 @@ def llm_extract(text, skip=()):
         raw = ask(LLM_PROMPT + text[:3000], tokens=800)
     except RuntimeError:
         return None
-    t, out = nz(text), []
+    t, out, seen = nz(text), [], set()
     for it in raw:
         if not isinstance(it, dict):
             continue
         nom = str(it.get("nom") or "").strip().lstrip("@")
-        if not nz(nom) or nz(nom) not in t or nz(nom) in skip:  # nom invente, ou compte qui publie
+        if not nz(nom):  # nom vide mais adresse ecrite (« 📍156 Rue Saint Martin 75003 ») : fiche sans nom, comme une adresse prise pour un nom
+            ecrites = [a for a in split_addrs(it.get("adresses") if isinstance(it.get("adresses"), list) else it.get("adresse")) if nz(a) in t and vraie_adresse(a)]
+            if not ecrites:
+                continue
+            nom = ecrites[0]
+        if nz(nom) not in t or nz(nom) in skip:  # nom invente, ou compte qui publie
             continue
-        if re.fullmatch(r"[\w.]+", nom) and re.search(r"[_.]", nom):  # un pseudo : marseille_en_cornet -> Marseille En Cornet
-            nom = pretty(nom)
-        txt = lambda k: str(it.get(k) or "").strip()
-        out.append({"nom": nom, "adresse": txt("adresse") if nz(txt("adresse")) in t and nz(txt("adresse")) else None,
-                    "ville": txt("ville") or None, "pays": txt("pays") or None,
-                    "prix": [o.strip() for o in it.get("offres") or [] if isinstance(o, str) and nz(o) and nz(o) in t][:8],
-                    "horaires": txt("horaires") if nz(txt("horaires")) and nz(txt("horaires")) in t else None})
+        if nom_descriptif(nom) and not vraie_adresse(nom):
+            trace("ecarte", nom=nom, raison="phrase d'accroche, pas un nom")
+            continue
+        if personne(nom, text):
+            trace("ecarte", nom=nom, raison="une personne, pas un etablissement")
+            continue
+        handle, nom_adresse = None, None
+        if vraie_adresse(nom):  # « 156 Rue Saint Martin 75003 » : une adresse, pas un nom (la legende n'en donne pas)
+            trace("nom_inconnu", adresse=nom)
+            nom_adresse, nom = nom, None
+        elif re.fullmatch(r"[\w.]+", nom) and (re.search(r"[_.]", nom) or nom.islower()):  # un pseudo : rednoodle.officiel -> Red Noodle
+            handle = nom
+            nom = name_from_handle(nom, candidates(text, skip)) or pretty(nom)              # (decoupe grace au texte), sinon Rednoodle
+        txt = lambda k: ("" if isinstance(it.get(k), list) else str(it.get(k) or "").strip())  # ["Paris","Lille"] : l'adresse dira la ville
+        base = {"nom": nom, "handle": handle, "adresse_ecrite": True, "ville": txt("ville") or None, "pays": txt("pays") or None,
+                "prix": [o.strip() for o in it.get("offres") or [] if isinstance(o, str) and nz(o) and nz(o) in t][:8],
+                "horaires": txt("horaires") if nz(txt("horaires")) and nz(txt("horaires")) in t else None}
+        adresses = [a for a in split_addrs(it.get("adresses") if isinstance(it.get("adresses"), list) else it.get("adresse")) if nz(a) in t and vraie_adresse(a)]  # « MARSEILLE » n'est pas une adresse
+        adresses = adresses or ([nom_adresse] if nom_adresse else [])
+        for a in adresses or [None]:  # une fiche par adresse ; une adresse inventee (absente du texte) est ecartee
+            if (nz(nom), nz(a)) not in seen:
+                seen.add((nz(nom), nz(a)))
+                out.append({**base, "adresse": a})
     return out
 
 
@@ -376,30 +645,79 @@ def llm_extract(text, skip=()):
 WEB_CACHE = DATA / "web_cache.json"  # nom + ville deja cherches : jamais deux fois la meme recherche
 WEB_MAX, WEB_PAUSE = 5, 2.0          # au plus 5 recherches par video, 2 s entre deux
 _last_web = [0.0]
+# moteurs interroges (pas Wikipedia ni Grokipedia, que le mode « auto » met en premier et qui ne connaissent pas les restaurants)
+WEB_MOTEURS = os.environ.get("TP_WEB_MOTEURS", "bing,brave,duckduckgo,mojeek,yahoo,startpage,google")
 WEB_PROMPT = ("Voici des extraits de resultats de recherche web pour des restaurants. Pour chaque restaurant, recopie son adresse postale "
               "EXACTEMENT telle qu'elle est ecrite dans un extrait (numero, rue, code postal, ville), sans rien ajouter ni deviner, et indique "
               "le numero du resultat d'ou elle vient. Si aucun extrait ne donne son adresse, n'ecris rien pour ce restaurant. "
               'Reponds uniquement en JSON : [{"restaurant":1,"adresse":"","resultat":1}]\n\n')
 
 
+MOTS_GENERIQUES = {"restaurant", "resto", "ramen", "sushi", "pizza", "pizzeria", "burger", "bar", "cafe", "bistrot", "brasserie", "bouillon",
+                   "boulangerie", "chez", "les", "the", "des", "maison"}
+
+
+def cite(nom, texte, flou=False):
+    """Le texte parle-t-il de ce restaurant ? Nom complet, ou tous ses mots distinctifs (« Ishin » suffit pour « Ishin ramen »).
+    flou : nom ENTENDU, la transcription ecorche l'orthographe (« Ishin » pour « Isshin ») : un mot tres proche suffit."""
+    t = nz(texte)
+    if nz(nom) and nz(nom) in t:
+        return True
+    mots = [nz(w) for w in re.findall(r"[\wÀ-ÿ'’]+", nom or "") if len(nz(w)) >= 3 and nz(w) not in MOTS_GENERIQUES]
+    if not flou:
+        return bool(mots) and all(m in t for m in mots)
+    proches = {nz(w) for w in re.findall(r"[\wÀ-ÿ'’]+", texte or "")}
+    return bool(mots) and all(m in t or any(len(m) >= 4 and w[:1] == m[:1] and difflib.SequenceMatcher(None, m, w).ratio() >= 0.8 for w in proches) for m in mots)
+
+
+def orthographe(nom, textes):
+    """Nom ENTENDU -> orthographe des pages web qui le confirment : « Ishin ramen » + « Isshin Ramen - TheFork » -> « Isshin ramen »."""
+    mots_web = [w for t in textes for w in re.findall(r"[\wÀ-ÿ'’]+", t)]
+    out = []
+    for w in nom.split():
+        m = nz(w)
+        proches = [x for x in mots_web if len(m) >= 4 and nz(x) != m and nz(x)[:1] == m[:1] and difflib.SequenceMatcher(None, m, nz(x)).ratio() >= 0.8]
+        if proches and not any(nz(x) == m for x in mots_web):  # le mot tel qu'entendu n'apparait nulle part : on prend l'orthographe la plus frequente
+            x = max(set(proches), key=proches.count)
+            w = x if not x.isupper() else x.title()
+        out.append(w)
+    return " ".join(out)
+
+
+RESTO = re.compile(r"(?i)restau|resto\b|bistro|brasserie|caf[eé]|\bbar\b|cuisine|menu|ramen|sushi|pizz|burger|boulang|p[aâ]tisser|traiteur|cantine|"
+                   r"food|kitchen|tripadvisor|thefork|lafourchette|opentable|deliveroo|uber ?eats|izakaya|tapas|cr[eê]pe")
+
+
 def web_search(q, region="fr-fr"):
     """Recherche web -> [{titre, lien, extrait}]. [] si la bibliotheque est absente, bloquee ou en panne : l'analyse continue."""
     r = []
-    try:
-        from ddgs import DDGS
-        if (wait := WEB_PAUSE - (time.monotonic() - _last_web[0])) > 0:
-            time.sleep(wait)
-        r = DDGS().text(q, region=region, max_results=8) or []
-    except Exception as e:  # noqa
-        if DEBUG: print("  [web] erreur", e)
-    _last_web[0] = time.monotonic()
+    for essai_n in range(2):  # moteurs satures ou trop de requetes rapprochees : une seconde chance 15 s plus tard
+        try:
+            from ddgs import DDGS
+            if (wait := WEB_PAUSE - (time.monotonic() - _last_web[0])) > 0:
+                time.sleep(wait)
+            r = DDGS().text(q, region=region, max_results=8, backend=WEB_MOTEURS) or []
+            break
+        except ImportError:
+            break
+        except Exception as e:  # noqa
+            trace("web_erreur", q=q, erreur=str(e)[:200])
+            if DEBUG: print("  [web] erreur", e)
+            if essai_n == 0:
+                time.sleep(15)
+        finally:
+            _last_web[0] = time.monotonic()
     if DEBUG: print(f"  [web] {q} -> {[x.get('href') for x in r][:5]}")
+    trace("web", q=q, resultats=[x.get("href") for x in r][:8])
     return [{"titre": str(x.get("title") or ""), "lien": str(x.get("href") or ""), "extrait": str(x.get("body") or "")} for x in r if isinstance(x, dict)]
 
 
-def addr_in(adr, r):  # anti-invention : adresse recopiee de CET extrait, avec un numero ou un type de voie
-    a = nz(adr)
-    return len(a) >= 6 and a in nz(r["titre"] + " " + r["extrait"]) and bool(re.search(r"\d", adr) or STREET.search(adr))
+def addr_in(adr, r):
+    """Anti-invention : le numero et la rue sont recopies de CET extrait. La ville peut etre ajoutee par l'IA
+    (« 22 Rue Fernand Philippart, Bordeaux » pour un extrait « 22 Rue Fernand Philippart 33000 Bordeaux »)."""
+    t = nz(r["titre"] + " " + r["extrait"])
+    rue = nz(adr.split(",")[0])
+    return len(rue) >= 6 and (nz(adr) in t or rue in t) and bool(re.search(r"\d", adr) or STREET.search(adr))
 
 
 def web_addresses(items):
@@ -415,12 +733,16 @@ def web_addresses(items):
             continue
         reg = "fr-fr" if not it.get("pays") or nz(it["pays"]) in ("france", "fr") else "wt-wt"
         res, seen = [], set()
-        for q in [f'"{it["nom"]}" {it.get("ville") or ""} adresse'] + ([f'{it["handle"]} {it.get("ville") or ""}'] if it.get("handle") else []):
-            if n >= WEB_MAX:
-                break
+        nom_q = it["nom"].title() if it["nom"].isupper() else it["nom"]  # « HONORÉ » : 0 resultat en majuscules
+        ville_q = (it.get("ville") or "").title() if (it.get("ville") or "").isupper() else (it.get("ville") or "")
+        for q in [f'"{nom_q}" {ville_q} adresse', f"{nom_q} {ville_q} restaurant adresse"] + ([f"{it['handle']} {ville_q}"] if it.get("handle") else []):
+            if res or n >= WEB_MAX:
+                break  # deja des resultats : pas de requete suivante
             n += 1
             for r in web_search(q.strip(), reg):
-                if r["lien"] not in seen and nz(it["nom"]) in nz(r["titre"] + " " + r["extrait"]):  # le resultat parle bien de CE restaurant
+                texte_r = r["titre"] + " " + r["extrait"] + " " + r["lien"]
+                if r["lien"] not in seen and cite(it["nom"], texte_r, flou=it.get("voix")) and (not it.get("voix") or RESTO.search(texte_r)):
+                    # le resultat parle bien de CE restaurant (et, pour un nom seulement entendu, d'un lieu ou l'on mange : pas d'un artisan homonyme)
                     seen.add(r["lien"]); res.append(r)
         hits[i] = res[:6]
     todo = [i for i in hits if hits[i]]
@@ -439,13 +761,16 @@ def web_addresses(items):
         except RuntimeError:
             pass  # IA indisponible : on se contente des adresses au format « 12 rue ... »
     for num, i in enumerate(todo, 1):
+        bon_nom = orthographe(items[i]["nom"], [r["titre"] for r in hits[i]]) if items[i].get("voix") else items[i]["nom"]
         found = next(({"adresse": adr, "source": hits[i][k - 1]["lien"]} for k, adr in llm.get(num, [])
                       if 1 <= k <= len(hits[i]) and addr_in(adr, hits[i][k - 1])), None)
         if not found:
             for r in hits[i]:
                 if m := STREET.search(r["extrait"]):
-                    found = {"adresse": re.split(r"(?<=\D)\.\s|\s[-–|·•]\s", m.group(0))[0].strip(" ,;."), "source": r["lien"]}
+                    found = {"adresse": re.split(r"(?<=\D)\.\s|\s[-–|·•]\s|\s*[:(]", m.group(0))[0].strip(" ,;."), "source": r["lien"]}
                     break
+        if found and bon_nom != items[i]["nom"]:
+            found["nom"] = bon_nom
         out[i] = found
     for i in hits:
         cache[keys[i]] = out[i]  # meme « rien trouve » : on ne recherche plus
@@ -456,7 +781,7 @@ def web_addresses(items):
     return out
 
 
-def verify(lieux, villes, progress):
+def verify(lieux, villes, progress, source="legende"):
     """Etablissements cites (nom, adresse ?, ville ?) -> fiches : OpenStreetMap confirme, sinon fiche « a verifier » placee sur l'adresse."""
     progress("Verification sur OpenStreetMap")
     res, zones, pending = [], {}, []  # pending : ni OSM ni adresse -> recherche web ; zones : centre de chaque ville, geocode une seule fois (une requete = 1 s d'attente)
@@ -472,23 +797,31 @@ def verify(lieux, villes, progress):
             if v:
                 uniques.setdefault(v.lower(), v)
         vs = list(uniques.values())
-        hit, addr, g, zs = None, None, None, []
+        noms = [*b.get("variantes", []), b["nom"]]  # « bouillon » entendu : « comme un bouillon » d'abord, le mot seul en dernier
+        if b["nom"] and len(s := re.sub(r"(?i)^(?:le|la|les|l['’]|the|el|il)\s+", "", b["nom"])) >= 3 and s != b["nom"]:
+            noms.append(s)  # « Le Hanbei » : OSM le connait sous « Hanbei »
+        zs = [z for v in vs[:3] if (z := zone(v, b.get("pays") or ""))]  # villes que OpenStreetMap connait (« #vieuxport » : non)
+        hit, addr, g = None, None, None
         if b.get("adresse"):
             addr, g = locate(b["adresse"], vs)
-            hit = osm_at(b["nom"], g) if g else None
-        if not hit and not g:  # pas d'adresse (ou introuvable) : on cherche le restaurant dans la ville
-            zs = [z for v in vs[:3] if (z := zone(v, b.get("pays") or ""))]  # villes que OpenStreetMap connait (« #vieuxport » : non)
-            hit = next(filter(None, (osm(b["nom"], near=z) for z in zs)), None) if zs else osm(b["nom"])
+            if g and zs and not b.get("adresse_ecrite") and not any(abs(g["lat"] - z[0]) <= z[2] and abs(g["lon"] - z[1]) <= z[2] for z in zs):
+                trace("adresse_ecartee", nom=b["nom"], adresse=addr, raison="hors de la ville citee")
+                addr, g = None, None  # « pres d'Opera » localise a Nice : adresse fausse
+            hit = next(filter(None, (osm_at(n, g) for n in noms)), None) if g else None
+        if not hit and not g:  # pas d'adresse (ou fausse) : on cherche le restaurant dans toute la ville
+            hit = next(filter(None, (osm(n, near=z) for n in noms for z in zs)), None) if zs else next(filter(None, (osm(n) for n in noms)), None)
         ville = vs[0][:1].upper() + vs[0][1:] if vs else None
-        f = fiche(**hit, prix=b["prix"], source="legende") if hit else at_address(b["nom"], addr, g, ville=ville, pays=b.get("pays"), prix=b["prix"], source="legende")
+        f = fiche(**hit, prix=b["prix"], source=source) if hit else at_address(b["nom"], addr, g, ville=ville, pays=b.get("pays"), prix=b["prix"], source=source)
         if b.get("horaires") and not f["horaires"]:
             f["horaires"] = b["horaires"]
         res.append(f)
-        if not hit and not g and zs:  # ni OpenStreetMap, ni adresse, mais une ville connue : candidat a la recherche web
+        if not hit and not g and zs and b["nom"] and (b.get("_src") != "voix" or len(b["nom"].split()) > 1):  # ville connue, ni OSM ni adresse : recherche web
+            # (sauf un mot entendu seul, trop vague pour une recherche)
             pending.append((len(res) - 1, b, vs, ville, zs[0]))
     if pending and os.environ.get("TP_WEB") != "0":
         progress("Recherche des adresses sur le web")
-        found = web_addresses([{"nom": b["nom"], "ville": ville, "pays": b.get("pays"), "handle": b.get("handle")} for _, b, _, ville, _ in pending])
+        found = web_addresses([{"nom": b["nom"], "ville": ville, "pays": b.get("pays"), "handle": b.get("handle"), "voix": b.get("_src") == "voix"}
+                               for _, b, _, ville, _ in pending])
         for (i, b, vs, ville, z), w in zip(pending, found):
             if not w:
                 continue
@@ -496,14 +829,45 @@ def verify(lieux, villes, progress):
             if not g or abs(g["lat"] - z[0]) > z[2] or abs(g["lon"] - z[1]) > z[2]:
                 continue  # adresse introuvable, ou dans une autre ville : homonyme
             hit = osm_at(b["nom"], g)
-            f = fiche(**hit, prix=b["prix"], source="legende") if hit else at_address(b["nom"], addr, g, ville=ville, pays=b.get("pays"), prix=b["prix"], source="legende")
+            f = fiche(**hit, prix=b["prix"], source=source) if hit else at_address(b["nom"], addr, g, ville=ville, pays=b.get("pays"), prix=b["prix"], source=source)
             if not hit:
                 f["confiance"] = "moyenne"  # adresse trouvee sur le web, restaurant absent d'OSM : « probable »
             if b.get("horaires") and not f["horaires"]:
                 f["horaires"] = b["horaires"]
             f["source_web"] = w["source"]
+            if w.get("nom") and not hit:  # « Ishin » entendu, « Isshin » sur les pages qui le confirment
+                trace("orthographe", entendu=b["nom"], web=w["nom"])
+                f["nom"] = w["nom"]
             res[i] = f
     return res
+
+
+def essai(f, *a, **k):
+    try:
+        return f(*a, **k)
+    except RuntimeError as e:  # IA indisponible (OpenRouter sans repli) : cette lecture ne donne rien, l'analyse continue
+        trace("llm_echec", raison=str(e)[:300])
+        return []
+
+
+EN_PASSANT = re.compile(r"(?i)\b(?:autres?|anciens?|premiers?)\s+(?:restos?|restaurants?|adresses?|etablissements?|établissements?|bistrots?|tables?)\b"
+                        r"|\b(?:proprietaire|propriétaire|createur|créateur|fondateur|chef)\s+(?:aussi\s+)?(?:de|du|des)\b|\bcomme\s+(?:chez|a|à)\b")
+
+
+def en_passant(nom, texte):
+    """« par le chef X, qui a deux autres restos que j'adore, la grotte et ... » : un nom cite dans la meme phrase, APRES une telle
+    formule, n'est pas le lieu presente par la video."""
+    cible, n = nz(nom), len(nom.split())
+
+    def dit(bout):  # meme suite de mots, a une faute de transcription pres (pas « j'adore » pour « Doré »)
+        w = [nz(x) for x in re.findall(r"[\wÀ-ÿ]+", bout)]
+        return any(c[:1] == cible[:1] and difflib.SequenceMatcher(None, c, cible).ratio() >= 0.85
+                   for k in (n, n + 1) for c in ("".join(w[i:i + k]) for i in range(len(w) - k + 1)))
+    for phrase in re.split(r"(?<=[.!?])\s+", texte or ""):  # Whisper coupe les lignes en pleine phrase : on decoupe aux points
+        m = EN_PASSANT.search(phrase)
+        if m and dit(phrase[m.end():]) and not dit(phrase[:m.start()]):
+            return True
+    return False
 
 
 def video_stage(url, wd, cap, progress):
@@ -523,14 +887,15 @@ def video_stage(url, wd, cap, progress):
            '"adresse" : numero et rue s\'ils sont dits, ecrits a l\'ecran ou dans la description, sinon "".')
     ctx = f"DESCRIPTION : {cap[:500]}\nPAROLES : {speech[:1800]}\n\n"
     progress("Lecture des noms cites a l'oral")
-    p1 = ask("Voici la transcription automatique d'une video (orthographe approximative, sans majuscules). Elle presente des adresses de "
-             "restaurants, cafes, bars ou boulangeries (ignore monuments, plages et autres lieux). Releve le NOM de chaque etablissement cite, "
+    p1 = essai(ask, "Voici la transcription automatique d'une video (orthographe approximative, sans majuscules). Elle presente des adresses de "
+             "restaurants, cafes, bars ou boulangeries (ignore monuments, plages, autres lieux et les personnes : chef, influenceur, invite). Releve le NOM de chaque etablissement que la video PRESENTE (celui ou l'on va, ou l'on mange, qui est teste ou recommande) ; ignore ceux cites en passant (autres restaurants du chef, comparaisons, souvenirs). "
              "meme s'il ressemble a une expression courante, en retrouvant toutes les adresses annoncees. N'invente rien. Ecris chaque nom comme il est ecrit ou dit, dans sa langue d'origine.\n" + ctx + fmt) if speech else []
     progress("Analyse des images")
-    p2 = ask("Video de voyage.\n" + ctx + "Liste les restaurants, cafes, bars ou boulangeries (pas les monuments ni les autres lieux) dont le NOM "
-             "est lisible a l'ecran (enseigne, texte incruste) ou prononce. N'invente rien. Ecris chaque nom comme il est ecrit (caracteres d'origine : japonais, coreen...).\n" + fmt,
+    p2 = essai(ask, "Video de voyage.\n" + f"DESCRIPTION : {cap[:500]}\n\n" + "Liste les restaurants, cafes, bars ou boulangeries (pas les monuments ni les autres lieux) "
+             "dont tu LIS le NOM a l'ecran (enseigne, devanture, menu, texte incruste). Le son n'est pas fourni : ne devine pas. N'invente rien. Ecris chaque nom comme il est ecrit (caracteres d'origine : japonais, coreen...).\n" + fmt,
              "--video", wd / "video.mp4", "--fps", "1", "--video-max-frames", "16")
-    return p1 + p2, speech
+    tag = lambda xs, s: [{**q, "_src": s} for q in xs if isinstance(q, dict)]
+    return tag(p1, "voix") + tag(p2, "image"), speech  # voix : entendu ; image : lu a l'ecran
 
 
 # ---------- fiche normalisee ----------
@@ -561,9 +926,26 @@ def analyze(url, progress=lambda s: None):
     if cache.exists():
         progress("Deja analysee : resultat en cache")
         return json.loads(cache.read_text())
-    res = _analyze(url, wd, progress)
+    TRACE[0] = wd / "trace.jsonl"
+    TRACE[0].write_text("")
+    try:
+        res = dedoublonne(_analyze(url, wd, progress))
+        trace("resultat", fiches=[(f.get("nom"), f.get("confiance"), f.get("adresse")) for f in res])
+    finally:
+        TRACE[0] = None
     cache.write_text(json.dumps(res, ensure_ascii=False))
     return res
+
+
+def dedoublonne(fiches):
+    """Meme nom, meme endroit, meme adresse (ecrite dans le titre et la description) : une seule fiche. 4 adresses differentes : 4 fiches."""
+    out, vus = [], set()
+    for f in fiches:
+        pos = (round(float(f["lat"]), 4), round(float(f["lon"]), 4)) if f.get("lat") not in (None, "") and f.get("lon") not in (None, "") else nz(f.get("adresse"))
+        k = (nz(f.get("nom")), pos, nz(re.sub(r"\([^)]*\)", "", f.get("adresse") or "")))  # « ... Belgique (invitation-partenariat) » = « ... Belgique »
+        if k not in vus:
+            vus.add(k); out.append(f)
+    return out
 
 
 def forget(url):
@@ -583,12 +965,18 @@ def _analyze(url, wd, progress):
 
     # 0) l'IA locale lit la legende telle quelle (n'importe quelle structure) ; chaque nom doit etre ecrit dans le texte, puis OpenStreetMap confirme
     progress("Lecture de la legende")
+    legende = []
     if items := llm_extract(cap, acc):
-        return verify(items, p["villes"], progress)
+        legende = verify(items, p["villes"], progress)
+        if any(f["confiance"] in ("haute", "moyenne") or f.get("lat") for f in legende):
+            return legende
+        # ni adresse, ni confirmation (« Camille Lavabre », la personne du titre) : la video tranche ; la legende ne sert que si elle ne donne rien
+        trace("legende_faible", noms=[f["nom"] for f in legende])
 
     # 0 bis) secours sans IA : legende en blocs « 📍@restaurant » + ses offres
     if p["lieux"]:
-        return verify([{**b, "ville": None, "pays": None, "horaires": None} for b in p["lieux"]], p["villes"], progress)
+        return verify([{**b, "adresse": a, "adresse_ecrite": True, "ville": None, "pays": None, "horaires": None} for b in p["lieux"] for a in (b["adresses"] or [None])],
+                      p["villes"], progress)
 
     # 1) legende : nom + adresses (n'importe quel pays)
     if p["nom"] and p["adresses"]:
@@ -606,26 +994,42 @@ def _analyze(url, wd, progress):
     if res:
         return res
 
-    # 2) video : voix + images
+    # 2) video : noms entendus (voix) et lus a l'ecran (image), verifies comme ceux de la legende (OpenStreetMap, puis web)
     spoken, speech = video_stage(url, wd, cap, progress)
-    progress("Verification sur OpenStreetMap")
-    seen = set()
+    items, seen, img_addr = [], set(), {}
+    for q in spoken:  # une meme adresse donnee a plusieurs noms lus a l'ecran : inventee (« 12 rue de la Paix » pour deux restaurants)
+        if q.get("_src", "image") == "image" and q.get("adresse"):
+            img_addr[nz(q["adresse"])] = img_addr.get(nz(q["adresse"]), 0) + 1
     for q in spoken:
         nom = (q.get("nom") or "").strip()
-        if not nom or nom.lower() in seen or nz(nom) in acc:  # jamais le nom du compte
+        if not nom or nz(nom) in seen or nz(nom) in acc:  # jamais le nom du compte
             continue
-        seen.add(nom.lower())
-        hit = osm(nom, hint=q.get("ville") or "", pays=q.get("pays") or "") or expand(nom, q.get("ville") or "", q.get("pays") or "", speech)
-        if hit and any(f["adresse"] == hit["adresse"] for f in res):
+        src = q.get("_src", "image")
+        if src == "voix" and not ecrit(nom, speech + " " + cap):
+            continue  # anti-invention : un nom entendu doit etre ecrit dans la transcription (ou la legende)
+        if src == "voix" and en_passant(nom, speech):
+            trace("ecarte", nom=nom, raison="cite en passant, pas presente par la video")
             continue
-        if hit:
-            res.append(fiche(**hit, prix=[], source="video"))
+        if nom_descriptif(nom) or personne(nom, speech + " " + cap):
+            trace("ecarte", nom=nom, raison="phrase d'accroche ou personne, pas un etablissement")
             continue
-        # adresse donnee par l'IA (ou la seule adresse de la legende) : on la cherche sur OSM, avec le restaurant s'il y est, sinon l'adresse seule
-        addr = (q.get("adresse") or "").strip() or (p["adresses"][0] if len(p["adresses"]) == 1 else "")
-        addr, g = locate(addr, [", ".join(filter(None, [q.get("ville"), q.get("pays")])), *p["villes"]]) if addr else (None, None)
-        hit = osm_at(nom, g) if g else None
-        res.append(fiche(**hit, prix=[], source="video") if hit else at_address(nom, addr, g, ville=q.get("ville"), pays=q.get("pays"), source="video"))
+        seen.add(nz(nom))
+        addr = (q.get("adresse") or "").strip()
+        if addr and not (vraie_adresse(addr) and (ecrit(addr, speech + " " + cap) if src == "voix" else img_addr.get(nz(addr)) == 1)):
+            trace("adresse_ecartee", nom=nom, adresse=addr, raison="vague, non dite, ou donnee a plusieurs noms")
+            addr = ""
+        addr = addr or (p["adresses"][0] if len(p["adresses"]) == 1 else "")
+        items.append({"nom": nom, "adresse": addr or None, "ville": q.get("ville"), "pays": q.get("pays"), "prix": [], "horaires": None,
+                      "_src": src, "variantes": variantes(nom, speech) if src == "voix" else []})
+    for b, f in zip(items, verify(items, p["villes"], progress, source="video") if items else []):
+        if b["_src"] == "voix" and f["confiance"] == "a_verifier" and not f.get("lat"):
+            trace("ecarte", nom=b["nom"], raison="entendu seulement, sans confirmation ni position")
+            continue  # seulement entendu, inconnu d'OSM et du web, sans adresse : ecarte (« Gardelion », « lieu historique »...)
+        if f.get("adresse") and any(f["adresse"] == x.get("adresse") for x in res):
+            continue  # deux noms pour le meme lieu
+        res.append(f)
+    if not res and legende:
+        res = legende  # la video n'a rien donne : on garde les noms de la legende, « a verifier »
     if not res:  # aucun nom trouve, mais des adresses dans la legende : on les place quand meme
         for addr in p["adresses"]:
             addr, g = locate(addr, p["villes"])

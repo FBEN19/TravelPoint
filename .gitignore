@@ -8,3 +8,5 @@ __pycache__/
 .backup-*/
 cookies.txt
 .DS_Store
+# banc d'essai : legendes, videos et resultats de travail (le rapport et l'historique, eux, sont versionnes)
+bench/data/

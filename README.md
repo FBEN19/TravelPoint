@@ -66,3 +66,30 @@ Quand OSM ne connait pas un restaurant et que le post ne donne pas d'adresse, l'
 d'un extrait (elle doit y etre ecrite mot pour mot), puis l'adresse doit se trouver dans la ville citee. La fiche passe en « probable »
 avec un lien « Source ↗ » vers la page d'origine. Au plus 5 recherches par video, jamais deux fois la meme (`data/web_cache.json`).
 `TP_WEB=0` desactive la recherche ; `TP_DEBUG=1` affiche les requetes. Si la recherche echoue ou est bloquee, la fiche reste « a verifier ».
+
+## Banc d'essai
+`python bench/bench.py` analyse les liens de `bench/cas.json` avec le code actuel et compare aux restaurants attendus :
+restaurant trouve (nom), adresse juste (marqueur a moins de 300 m), bonne ville, fiches en trop, noms qui ressemblent a une adresse.
+- Il travaille dans `bench/data/`, jamais dans `data/` (ta base n'est pas touchee).
+- Il reprend les legendes, transcriptions et videos deja telechargees par l'app ; `--frais` retelecharge tout. `--cas id1,id2` pour quelques cas.
+- Resultat : `bench/rapport.md` (detail par lien) et une ligne dans `bench/historique.csv` pour suivre les progres d'un commit a l'autre.
+- Ajouter un cas : un lien + les restaurants attendus dans `cas.json` (`verifie: false` tant que la reponse n'est pas sure).
+Compter environ 1 min par lien quand la video doit etre analysee ; 15 s d'attente entre deux liens Instagram pas encore telecharges.
+
+## IA en ligne : OpenRouter (modeles gratuits)
+Par defaut l'IA tourne en local (Qwen3-VL 4B). Pour utiliser les modeles gratuits d'OpenRouter, plus gros et sans chargement :
+1. Cree une cle sur openrouter.ai, puis mets-la dans `data/openrouter.key` (ignore par git) ou dans la variable `OPENROUTER_API_KEY`.
+2. Lance avec `TP_LLM=openrouter uvicorn app:app --port 8420` (ou `TP_LLM=openrouter python bench/bench.py`).
+- Modeles : ta liste (voir ci-dessous), avec en dernier `openrouter/free`, le routeur des modeles gratuits.
+  Ordre d'essai : `modeles_openrouter.txt` (une ligne par modele). Un modele qui echoue (erreur, quota, reponse vide ou sans JSON) passe la main
+  au suivant ; « aucun restaurant » (`[]`) est une vraie reponse et s'arrete la. Pour la lecture des images de la video, les modeles
+  qui ne lisent pas les images sont sautes (OpenRouter est interroge une fois par jour). Ponctuellement : `TP_OR_MODELES=m1:free,m2:free`.
+  La trace de chaque analyse dit quel modele a repondu.
+- Une video est envoyee sous forme de 12 images reparties sur toute sa duree. La voix reste transcrite en local par Whisper.
+- Limites des modeles gratuits : 20 requetes/minute, 1 000 par jour (une fois 10 $ de credits achetes). Si OpenRouter est sature ou en panne,
+  l'app repasse automatiquement sur l'IA locale (`TP_OR_REPLI=0` pour l'interdire). Le rapport du banc dit combien de lectures ont ete faites par chaque IA.
+- **Comparer les modeles** : `python bench/modeles.py` fait passer chaque modele seul (sans repli local) sur 8 cas du banc
+  et les classe : restaurants trouves, adresses justes, fiches en trop, reponses utiles / vides / illisibles, temps par reponse.
+  Rapport `bench/modeles.md`, historique `bench/modeles.csv`. `--appliquer` reecrit `modeles_openrouter.txt` dans l'ordre du classement ;
+  `--modeles a,b` / `--cas tous` pour choisir. Environ 3 requetes par cas et par modele : surveille le quota de 1 000 par jour.
+- Ce que tu envoies (legendes, transcriptions, images) part chez les fournisseurs des modeles : verifie leurs conditions dans les reglages de confidentialite d'OpenRouter.
