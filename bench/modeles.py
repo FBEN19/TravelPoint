@@ -1,4 +1,4 @@
-"""Banc des modeles OpenRouter : chaque modele SEUL (sans repli sur l'IA locale) sur les memes cas, puis un classement.
+"""Banc des modeles OpenRouter : chaque modele SEUL (sans les autres en secours) sur les memes cas, puis un classement.
 
     python bench/modeles.py                                   # modeles de modeles_openrouter.txt, cas « rapides »
     python bench/modeles.py --cas tous                        # tous les cas (plus de requetes)
@@ -31,7 +31,7 @@ def memoriser():
         vraie = getattr(pipeline, nom)
 
         def enveloppe(*a, _vraie=vraie, _memo=memo, _f=f, _vide=garder_vide, **k):
-            cle = json.dumps([a, k], sort_keys=True, ensure_ascii=False, default=str)
+            cle = json.dumps([a[:2], {x: y for x, y in k.items() if x != "dire"}], sort_keys=True, ensure_ascii=False, default=str)  # sans l'affichage
             if cle not in _memo:
                 r = _vraie(*a, **k)
                 if r or _vide:
@@ -81,7 +81,7 @@ def ecrire(res, cas, interrompu):
     pct = lambda a, b: f"{round(100 * a / b)} %" if b else "—"
     oui = {True: "oui", False: "non", None: "?"}
     lignes = [f"# Banc des modeles OpenRouter — {datetime.datetime.now():%Y-%m-%d %H:%M}", "",
-              f"{len(cas)} cas ({', '.join(c['id'] for c in cas)}), chaque modele seul, sans repli local. "
+              f"{len(cas)} cas ({', '.join(c['id'] for c in cas)}), chaque modele seul, sans les autres en secours. "
               "Note /100 = 50 × restaurants trouves + 30 × adresses justes + 20 × reponses utiles − 5 par fiche en trop.", ""]
     if interrompu:
         lignes += ["⚠️ **Quota du jour epuise : banc interrompu**, les modeles suivants n'ont pas ete testes. Relance demain avec `--modeles` sur ceux qui manquent.", ""]
@@ -137,7 +137,8 @@ def main():
     print(f"{len(modeles)} modeles × {len(cas)} cas ≈ {estimation} requetes au maximum (quota : 1000 par jour, ~20 par minute).")
     if not args.oui and input("On y va ? [o/N] ").strip().lower() not in ("o", "oui", "y"):
         return
-    os.environ.update({"TP_LLM": "openrouter", "TP_OR_REPLI": "0", "TP_OR_ATTENTE": "1"})
+    os.environ.update({"TP_OR_ATTENTE": "1"})
+    os.environ.pop("TP_LLM", None)
     memoriser()
     res, interrompu = [], False
     for i, m in enumerate(modeles, 1):

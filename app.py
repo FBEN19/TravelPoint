@@ -10,6 +10,8 @@ import pipeline
 DB = pipeline.DATA / "travelpoint.db"
 HERE = pathlib.Path(__file__).parent
 app = FastAPI(title="Travelpoint")
+if not pipeline.or_cle():
+    print("⚠️  Pas de cle OpenRouter (data/openrouter.key) : l'IA est desactivee, seules les regles simples analysent les legendes.")
 todo: "queue.Queue[str]" = queue.Queue()
 
 

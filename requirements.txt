@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-mlx-vlm
 mlx-whisper
 yt-dlp
 ddgs

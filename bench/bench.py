@@ -70,7 +70,7 @@ def amorcer(key, wd, sources):
     if not src or (wd / "video.info.json").exists():
         return
     wd.mkdir(parents=True, exist_ok=True)
-    for n in ("video.info.json", "a.txt", "video.mp4"):
+    for n in ("video.info.json", "a.txt", "a.modele", "video.mp4"):
         if (src / n).exists():
             shutil.copy2(src / n, wd / n)
 
@@ -93,9 +93,9 @@ def commit():
 
 
 def ia():
-    if os.environ.get("TP_LLM") == "openrouter" and pipeline.or_cle():
+    if os.environ.get("TP_LLM") != "0" and pipeline.or_cle():
         return f"OpenRouter ({', '.join(pipeline.or_modeles())})"
-    return "locale (Qwen3-VL 4B)"
+    return "aucune (regles seules)"
 
 
 def fmt_fiche(r):
@@ -126,7 +126,7 @@ def rapport(runs, total_s):
     pct = lambda a, b: f"{a}/{b} ({round(100 * a / b)} %)" if b else "—"
     st = pipeline.STATS
     lines = [f"# Banc d'essai Travelpoint — {datetime.datetime.now():%Y-%m-%d %H:%M} (commit {commit()})", "",
-             f"IA : **{ia()}** — lectures : {st['openrouter']} par OpenRouter, {st['local']} en local (dont {st['repli']} replis)", "",
+             f"IA : **{ia()}** — lectures : {st['openrouter']} reussies, {st['echecs']} echouees (tous les modeles indisponibles)", "",
              f"Score sur les **{len(ok)} cas verifies** :", "",
              f"- Restaurants trouves : **{pct(tot('trouves'), tot('attendus'))}**",
              f"- Adresses justes (< {SEUIL_M} m) : **{pct(tot('adresses_ok'), tot('adresses_attendues'))}**",

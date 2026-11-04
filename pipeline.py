@@ -1,14 +1,13 @@
 """Travelpoint - pipeline d'analyse (restaurants) : lien -> fiches restaurant.
-Texte d'abord (legende + OpenStreetMap), video (Whisper + Qwen3-VL via MLX) seulement si besoin.
+Texte d'abord (legende + OpenStreetMap), video (Whisper en local pour la voix + images lues par OpenRouter) seulement si besoin.
 Tout tourne en local ; un dossier de travail par lien (cache) dans data/jobs/<hash>/.
 """
-import base64, difflib, hashlib, json, os, pathlib, re, subprocess, sys, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
+import base64, difflib, html, hashlib, json, os, pathlib, re, subprocess, sys, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 
 BIN = pathlib.Path(sys.executable).parent  # binaires du venv (yt-dlp, mlx_whisper)
 os.environ["PATH"] += os.pathsep + "/opt/homebrew/bin" + os.pathsep + "/usr/local/bin"  # ffmpeg (brew)
 DATA = pathlib.Path(os.environ.get("TP_DATA", "data")); DATA.mkdir(exist_ok=True)
-VLM = os.environ.get("TP_VLM", "mlx-community/Qwen3-VL-4B-Instruct-4bit")
-WHISPER = os.environ.get("TP_WHISPER", "mlx-community/whisper-small-mlx")
+WHISPER = os.environ.get("TP_WHISPER", "mlx-community/whisper-large-v3-turbo")  # plus precis que small sur les noms propres, ~1,6 Go
 UA = {"User-Agent": "Travelpoint/0.1 (self-hosted)", "Accept-Language": "fr,en"}
 DEBUG = bool(os.environ.get("TP_DEBUG"))
 GENERIC = {"fyp", "foryou", "pourtoi", "viral", "reels", "reel", "voyage", "travel", "food", "foodie", "paris", "france",
@@ -189,7 +188,8 @@ def parse_caption(text, skip=()):
     text = scrub(clean(text), skip)
     cands = candidates(text, skip)
     handle = handle_of(text, skip)
-    pins = [a.strip() for a in ADDR.findall(text) if not a.strip().startswith("@")] or [a.strip(" ,;.-–") for a in STREET.findall(text)]  # sans 📍 : adresse ecrite telle quelle ; « 📍@pseudo » n'est pas une adresse
+    pins = [a for a in (re.sub(r"#[\w-]+", " ", a).strip(" ,;.-–") for a in ADDR.findall(text) if not a.strip().startswith("@")) if len(nz(a)) >= 3]  # « 📍 #food #toulouse » : des hashtags, pas une adresse
+    pins = pins or [a.strip(" ,;.-–") for a in STREET.findall(text)]  # sans 📍 : adresse ecrite telle quelle ; « 📍@pseudo » n'est pas une adresse
     quoted = QUOTED.search(text)
     name, src = None, None
     if handle:
@@ -361,10 +361,9 @@ def variantes(nom, speech):
     return []
 
 
-# ---------- video : Whisper + Qwen3-VL ----------
-# ---------- IA : OpenRouter (modeles gratuits, en ligne) ou Qwen3-VL local (MLX) ----------
+# ---------- IA : OpenRouter (modeles gratuits, en ligne). Sans elle (pas de cle, quota, panne) : les regles simples ----------
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
-STATS = {"openrouter": 0, "repli": 0, "local": 0, "quota_jour": 0}  # combien de lectures par chaque IA (affiche par le banc)
+STATS = {"openrouter": 0, "echecs": 0, "quota_jour": 0}  # lectures reussies / echouees (affiche par le banc)
 
 
 def or_cle():
@@ -511,37 +510,26 @@ def json_ok(texte):
     return None
 
 
-def json_list(texte):
-    m = re.search(r"\[\s*\{.*\}\s*\]", texte or "", re.S)
-    try:
-        return json.loads(m.group(0)) if m else []
-    except json.JSONDecodeError:
-        return []
-
-
 def ask(prompt, *extra, tokens=300):
-    """Lecture par l'IA -> liste JSON. TP_LLM=openrouter (et une cle) : OpenRouter, avec repli sur l'IA locale s'il est sature ou en panne."""
-    if os.environ.get("TP_LLM") == "openrouter" and or_cle():
-        try:
-            texte, modele = ask_openrouter(prompt, extra, tokens)
-            STATS["openrouter"] += 1
-            if DEBUG:
-                print(f"  [llm openrouter:{modele}]", texte[-900:])
-            trace("llm", consigne=prompt[:200], images=bool(extra), reponse=texte[-1500:], via=f"openrouter:{modele}")
-            return json_ok(texte) or []
-        except Exception as e:  # noqa : quota (429), panne, reseau... -> IA locale
-            STATS["repli"] += 1
-            trace("llm_repli", raison=str(e)[:300])
-            if DEBUG:
-                print("  [llm] OpenRouter indisponible, repli sur l'IA locale :", e)
-            if os.environ.get("TP_OR_REPLI") == "0":
-                raise RuntimeError(f"OpenRouter indisponible : {e}")
-    r = run([sys.executable, "-m", "mlx_vlm.generate", "--model", VLM, *extra, "--max-tokens", str(tokens), "--temperature", "0", "--prompt", prompt])
-    STATS["local"] += 1
+    """Lecture par l'IA (OpenRouter) -> liste JSON. RuntimeError si elle est indisponible (TP_LLM=0, pas de cle, quota, panne) :
+    chaque appelant continue sans elle (regles simples pour la legende, adresses « 12 rue ... » pour le web, rien pour la video)."""
+    if os.environ.get("TP_LLM") == "0":
+        raise RuntimeError("IA desactivee (TP_LLM=0)")
+    if not or_cle():
+        raise RuntimeError("pas de cle OpenRouter (data/openrouter.key)")
+    try:
+        texte, modele = ask_openrouter(prompt, extra, tokens)
+    except Exception as e:  # noqa : quota (429), panne, reseau...
+        STATS["echecs"] += 1
+        trace("llm_echec", raison=str(e)[:300])
+        if DEBUG:
+            print("  [llm] OpenRouter indisponible :", e)
+        raise RuntimeError(f"OpenRouter indisponible : {e}")
+    STATS["openrouter"] += 1
     if DEBUG:
-        print("  [llm]", r.stdout[-900:])
-    trace("llm", consigne=prompt[:200], images=bool(extra), reponse=r.stdout[-1500:], via="local")
-    return json_list(r.stdout)
+        print(f"  [llm openrouter:{modele}]", texte[-900:])
+    trace("llm", consigne=prompt[:200], images=bool(extra), reponse=texte[-1500:], via=f"openrouter:{modele}")
+    return json_ok(texte) or []
 
 
 LLM_PROMPT = ("Voici la legende d'une video de reseau social (format libre : emojis, @pseudos, hashtags, publicites...). "
@@ -595,7 +583,7 @@ def split_addrs(values):
 
 
 def llm_extract(text, skip=()):
-    """Un LLM local lit la legende telle quelle, quelle que soit sa structure. Anti-invention : un nom, une adresse ou une offre
+    """L'IA lit la legende telle quelle, quelle que soit sa structure. Anti-invention : un nom, une adresse ou une offre
     qui n'est pas ECRIT dans le texte est ecarte. None = LLM indisponible (ou legende trop courte) : on retombe sur les regles."""
     if os.environ.get("TP_LLM") == "0" or len(text.strip()) < 25:
         return None
@@ -644,6 +632,7 @@ def llm_extract(text, skip=()):
 # ---------- recherche web gratuite (bibliotheque ddgs : sans cle ni compte) pour les restaurants inconnus d'OpenStreetMap ----------
 WEB_CACHE = DATA / "web_cache.json"  # nom + ville deja cherches : jamais deux fois la meme recherche
 WEB_MAX, WEB_PAUSE = 5, 2.0          # au plus 5 recherches par video, 2 s entre deux
+WEB_REESSAI = 15                     # attente avant la seconde chance quand les moteurs refusent
 _last_web = [0.0]
 # moteurs interroges (pas Wikipedia ni Grokipedia, que le mode « auto » met en premier et qui ne connaissent pas les restaurants)
 WEB_MOTEURS = os.environ.get("TP_WEB_MOTEURS", "bing,brave,duckduckgo,mojeek,yahoo,startpage,google")
@@ -664,8 +653,8 @@ def cite(nom, texte, flou=False):
     if nz(nom) and nz(nom) in t:
         return True
     mots = [nz(w) for w in re.findall(r"[\wÀ-ÿ'’]+", nom or "") if len(nz(w)) >= 3 and nz(w) not in MOTS_GENERIQUES]
-    if not flou:
-        return bool(mots) and all(m in t for m in mots)
+    if not flou:  # au pluriel pres : « Kongfu Pâtes » / « Kongfu Pâte »
+        return bool(mots) and all(m in t or (len(m) > 4 and m[-1] in "sx" and m[:-1] in t) for m in mots)
     proches = {nz(w) for w in re.findall(r"[\wÀ-ÿ'’]+", texte or "")}
     return bool(mots) and all(m in t or any(len(m) >= 4 and w[:1] == m[:1] and difflib.SequenceMatcher(None, m, w).ratio() >= 0.8 for w in proches) for m in mots)
 
@@ -688,7 +677,7 @@ RESTO = re.compile(r"(?i)restau|resto\b|bistro|brasserie|caf[eé]|\bbar\b|cuisin
                    r"food|kitchen|tripadvisor|thefork|lafourchette|opentable|deliveroo|uber ?eats|izakaya|tapas|cr[eê]pe")
 
 
-def web_search(q, region="fr-fr"):
+def web_search(q, region="fr-fr", dire=None):
     """Recherche web -> [{titre, lien, extrait}]. [] si la bibliotheque est absente, bloquee ou en panne : l'analyse continue."""
     r = []
     for essai_n in range(2):  # moteurs satures ou trop de requetes rapprochees : une seconde chance 15 s plus tard
@@ -702,13 +691,18 @@ def web_search(q, region="fr-fr"):
             break
         except Exception as e:  # noqa
             trace("web_erreur", q=q, erreur=str(e)[:200])
+            if dire:
+                dire(f"  web : bloque ({str(e)[:40]})" + (", nouvel essai dans 15 s" if essai_n == 0 else ""))
             if DEBUG: print("  [web] erreur", e)
             if essai_n == 0:
-                time.sleep(15)
+                time.sleep(WEB_REESSAI)
         finally:
             _last_web[0] = time.monotonic()
     if DEBUG: print(f"  [web] {q} -> {[x.get('href') for x in r][:5]}")
     trace("web", q=q, resultats=[x.get("href") for x in r][:8])
+    if dire:
+        sites = list(dict.fromkeys(urllib.parse.urlparse(x.get("href") or "").netloc.removeprefix("www.") for x in r if isinstance(x, dict)))
+        dire(f"  web : {q}  →  {len(r)} resultat(s)" + (f" ({', '.join(sites[:4])})" if sites else ""))
     return [{"titre": str(x.get("title") or ""), "lien": str(x.get("href") or ""), "extrait": str(x.get("body") or "")} for x in r if isinstance(x, dict)]
 
 
@@ -720,14 +714,43 @@ def addr_in(adr, r):
     return len(rue) >= 6 and (nz(adr) in t or rue in t) and bool(re.search(r"\d", adr) or STREET.search(adr))
 
 
-def web_addresses(items):
+PAGES_FERMEES = ("pagesjaunes.", "tripadvisor.", "mappy.", "maps.apple.", "google.", "facebook.", "instagram.", "tiktok.", "youtube.")
+
+
+def adresse_page(url, nom, ville):
+    """Les extraits de recherche n'ont pas toujours l'adresse, la page elle-meme souvent si (fiche JSON-LD des annuaires et offices
+    de tourisme, ou « 2 Rue Castellane 31000 TOULOUSE » dans le texte). Seulement si la page parle de ce restaurant ET de cette ville."""
+    if any(d in url for d in PAGES_FERMEES):
+        return None  # pages qui bloquent les robots ou se chargent en JavaScript
+    try:
+        brut = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) Travelpoint", "Accept-Language": "fr,en"}),
+                                      timeout=10).read(600000).decode("utf-8", "ignore")
+    except Exception:  # noqa
+        return None
+    rue, cp = re.search(r'"streetAddress"\s*:\s*"([^"]{4,120})"', brut), re.search(r'"postalCode"\s*:\s*"([^"]{3,12})"', brut)
+    texte = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", brut))))
+    if not cite(nom, texte + " " + brut[:200000], flou=True) or (ville and nz(ville) not in nz(texte + " " + brut[:20000])):
+        return None
+    if rue and STREET.search(rue.group(1)):
+        return f"{rue.group(1).strip()}, {cp.group(1) + ' ' if cp else ''}{ville or ''}".strip(" ,")
+    for m in STREET.finditer(texte):
+        fin = texte[m.start():m.start() + 120]
+        if ville and nz(ville) in nz(fin) and (c := re.search(rf"(?i)^(.*?\b\d{{4,5}}\s+{re.escape(ville)})", fin)):
+            return c.group(1).strip(" ,;")
+    return None
+
+
+def web_addresses(items, dire=None):
     """[{nom, ville, pays, handle}] -> [{adresse, source} ou None] dans le meme ordre. Seuls comptent les resultats qui citent le restaurant."""
     try:
         cache = json.loads(WEB_CACHE.read_text())
     except Exception:  # noqa
         cache = {}
     keys = [nz(it["nom"]) + "|" + nz(it.get("ville")) for it in items]
+    for k in [k for k, v in cache.items() if isinstance(v, dict) and "vide" in v and time.time() - v["vide"] > 86400]:
+        del cache[k]  # echec de plus d'un jour : on retentera
     out, hits, n = [cache.get(k) for k in keys], {}, 0
+    out = [None if isinstance(o, dict) and "vide" in o else o for o in out]
     for i, it in enumerate(items):
         if keys[i] in cache or n >= WEB_MAX:
             continue
@@ -736,15 +759,15 @@ def web_addresses(items):
         nom_q = it["nom"].title() if it["nom"].isupper() else it["nom"]  # « HONORÉ » : 0 resultat en majuscules
         ville_q = (it.get("ville") or "").title() if (it.get("ville") or "").isupper() else (it.get("ville") or "")
         for q in [f'"{nom_q}" {ville_q} adresse', f"{nom_q} {ville_q} restaurant adresse"] + ([f"{it['handle']} {ville_q}"] if it.get("handle") else []):
-            if res or n >= WEB_MAX:
-                break  # deja des resultats : pas de requete suivante
+            if any(STREET.search(r["extrait"]) for r in res) or n >= WEB_MAX:
+                break  # deja une adresse dans les resultats : pas de requete suivante (sinon on essaie la suivante)
             n += 1
-            for r in web_search(q.strip(), reg):
+            for r in web_search(q.strip(), reg, dire):
                 texte_r = r["titre"] + " " + r["extrait"] + " " + r["lien"]
                 if r["lien"] not in seen and cite(it["nom"], texte_r, flou=it.get("voix")) and (not it.get("voix") or RESTO.search(texte_r)):
                     # le resultat parle bien de CE restaurant (et, pour un nom seulement entendu, d'un lieu ou l'on mange : pas d'un artisan homonyme)
                     seen.add(r["lien"]); res.append(r)
-        hits[i] = res[:6]
+        hits[i] = sorted(res, key=lambda r: not STREET.search(r["extrait"]))[:6]  # les extraits qui donnent une adresse d'abord
     todo = [i for i in hits if hits[i]]
     llm = {}
     if todo:  # un seul appel a l'IA pour tous les restaurants (le modele ne se charge qu'une fois)
@@ -771,9 +794,15 @@ def web_addresses(items):
                     break
         if found and bon_nom != items[i]["nom"]:
             found["nom"] = bon_nom
+        if not found:  # extraits sans adresse : on ouvre les pages elles-memes (pas un moteur de recherche : pas de blocage)
+            for r in hits[i][:4]:
+                if adr := adresse_page(r["lien"], items[i]["nom"], items[i].get("ville")):
+                    trace("web_page", lien=r["lien"], adresse=adr)
+                    found = {"adresse": adr, "source": r["lien"]}
+                    break
         out[i] = found
-    for i in hits:
-        cache[keys[i]] = out[i]  # meme « rien trouve » : on ne recherche plus
+    for i in hits:  # « rien trouve » : retenu une journee seulement (souvent un blocage passager des moteurs)
+        cache[keys[i]] = out[i] or {"vide": time.time()}
     try:
         WEB_CACHE.write_text(json.dumps(cache, ensure_ascii=False))
     except OSError:
@@ -821,8 +850,9 @@ def verify(lieux, villes, progress, source="legende"):
     if pending and os.environ.get("TP_WEB") != "0":
         progress("Recherche des adresses sur le web")
         found = web_addresses([{"nom": b["nom"], "ville": ville, "pays": b.get("pays"), "handle": b.get("handle"), "voix": b.get("_src") == "voix"}
-                               for _, b, _, ville, _ in pending])
+                               for _, b, _, ville, _ in pending], progress)
         for (i, b, vs, ville, z), w in zip(pending, found):
+            progress(f"  web : {b['nom']}  →  " + (f"adresse lue : {w['adresse']} ({urllib.parse.urlparse(w['source']).netloc.removeprefix('www.')})" if w else "pas d'adresse"))
             if not w:
                 continue
             addr, g = locate(w["adresse"], vs)
@@ -845,8 +875,7 @@ def verify(lieux, villes, progress, source="legende"):
 def essai(f, *a, **k):
     try:
         return f(*a, **k)
-    except RuntimeError as e:  # IA indisponible (OpenRouter sans repli) : cette lecture ne donne rien, l'analyse continue
-        trace("llm_echec", raison=str(e)[:300])
+    except RuntimeError:  # IA indisponible : cette lecture ne donne rien, l'analyse continue
         return []
 
 
@@ -874,13 +903,15 @@ def video_stage(url, wd, cap, progress):
     if not (wd / "video.mp4").exists():
         progress("Telechargement de la video")
         ytdlp(url, "-f", "bv*[height<=480]+ba/b", "--merge-output-format", "mp4", "-o", str(wd / "video.%(ext)s"))
-    speech = (wd / "a.txt").read_text().strip() if (wd / "a.txt").exists() else ""
+    marque = wd / "a.modele"  # modele qui a fait la transcription : une transcription d'un autre modele est refaite
+    speech = (wd / "a.txt").read_text().strip() if (wd / "a.txt").exists() and marque.exists() and marque.read_text().strip() == WHISPER else ""
     if not speech:
         progress("Transcription de l'audio")
         try:
             run(["ffmpeg", "-y", "-loglevel", "error", "-i", wd / "video.mp4", "-t", "60", "-vn", "-ac", "1", "-ar", "16000", wd / "a.wav"])
             run([BIN / "mlx_whisper", wd / "a.wav", "--model", WHISPER, "-f", "txt", "--output-dir", wd])
             speech = (wd / "a.txt").read_text().strip()
+            marque.write_text(WHISPER)
         except RuntimeError:
             speech = ""  # pas d'audio exploitable : images seules
     fmt = ('Reponds uniquement en JSON : [{"nom":"","adresse":"","ville":"","pays":""}] ou [] si aucun nom. '
@@ -915,7 +946,7 @@ def same(a, b):
 
 def analyze(url, progress=lambda s: None):
     """url -> liste de fiches restaurant (dict). Une video deja analysee (meme identifiant, quels que soient les parametres du lien)
-    est relue depuis le cache result.json : ni telechargement, ni Whisper, ni Qwen."""
+    est relue depuis le cache result.json : ni telechargement, ni Whisper, ni IA."""
     legacy = DATA / "jobs" / hashlib.sha1(url.encode()).hexdigest()[:10]  # ancien nom de dossier (hash du lien exact)
     key, url = canon(url)
     wd = DATA / "jobs" / hashlib.sha1(key.encode()).hexdigest()[:10]
@@ -951,6 +982,11 @@ def dedoublonne(fiches):
 def forget(url):
     """Oublie le resultat en cache d'une video pour pouvoir la reanalyser (legende, video et transcription restent en cache)."""
     (DATA / "jobs" / hashlib.sha1(canon(url)[0].encode()).hexdigest()[:10] / "result.json").unlink(missing_ok=True)
+    try:  # et les recherches web restees sans resultat : la reanalyse les retente
+        cache = json.loads(WEB_CACHE.read_text())
+        WEB_CACHE.write_text(json.dumps({k: v for k, v in cache.items() if not (v is None or (isinstance(v, dict) and "vide" in v))}, ensure_ascii=False))
+    except Exception:  # noqa
+        pass
 
 
 def _analyze(url, wd, progress):
@@ -1000,11 +1036,19 @@ def _analyze(url, wd, progress):
     for q in spoken:  # une meme adresse donnee a plusieurs noms lus a l'ecran : inventee (« 12 rue de la Paix » pour deux restaurants)
         if q.get("_src", "image") == "image" and q.get("adresse"):
             img_addr[nz(q["adresse"])] = img_addr.get(nz(q["adresse"]), 0) + 1
+    lus = {nz(q.get("nom")) for q in spoken if q.get("_src") == "image" and q.get("nom")}
     for q in spoken:
         nom = (q.get("nom") or "").strip()
+        for l in legende:  # « LES THERMES » lu sur l'enseigne, « Les Thermes Kongfu Pâtes » ecrit dans la legende : le nom complet
+            if nom and l.get("nom") and nz(nom) != nz(l["nom"]) and nz(nom) in nz(l["nom"]):
+                trace("nom_complete", lu=nom, legende=l["nom"])
+                nom = l["nom"]
+                break
         if not nom or nz(nom) in seen or nz(nom) in acc:  # jamais le nom du compte
             continue
         src = q.get("_src", "image")
+        if src == "voix" and nz(nom) in lus:  # dit ET lu a l'ecran (« Honoré » / « HONORÉ ») : aussi sur qu'un nom lu
+            src = "image"
         if src == "voix" and not ecrit(nom, speech + " " + cap):
             continue  # anti-invention : un nom entendu doit etre ecrit dans la transcription (ou la legende)
         if src == "voix" and en_passant(nom, speech):

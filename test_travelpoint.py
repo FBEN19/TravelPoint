@@ -8,6 +8,8 @@ os.environ["TP_DATA"] = tempfile.mkdtemp(prefix="tp-test-")  # avant d'importer 
 import uvicorn
 import app as server
 import pipeline
+pipeline.or_cle = lambda: os.environ.get("OPENROUTER_API_KEY", "")  # jamais ta vraie cle (data/openrouter.key) pendant les tests
+pipeline.WEB_REESSAI = 0
 LIT_IMAGES = pipeline.lit_images  # la vraie (les tests OpenRouter la remplacent)
 
 REAL_URLOPEN, DEFAULT_DELAY = urllib.request.urlopen, pipeline.NOMINATIM_DELAY
@@ -153,7 +155,7 @@ Les réducs COMPASS beneeeeef :
         self.assertEqual([(r["nom"], r["confiance"], r["ville"], r["adresse"]) for r in res],
                          [("Marseille En Cornet", "a_verifier", "Marseille", None), ("Farfalou", "a_verifier", "Marseille", None)])
 
-    def llm(self, items):  # reponse simulee de l'IA locale
+    def llm(self, items):  # reponse simulee de l'IA
         return mock.patch.object(pipeline, "ask", return_value=items)
 
     def test_llm_legende_sans_structure(self):  # aucune regle ne marcherait : texte libre, pas de pin, pas de @pseudo
@@ -184,7 +186,7 @@ Les réducs COMPASS beneeeeef :
         """Analyse avec recherche web simulee -> (fiche, nombre de recherches). llm : reponse simulee de l'IA sur les extraits."""
         calls = []
 
-        def fake(q, region="fr-fr"):
+        def fake(q, region="fr-fr", dire=None):
             calls.append(q)
             return [dict(r) for r in extraits]
         with contextlib.ExitStack() as st:
@@ -299,6 +301,13 @@ Adresse cachée à Châtelet : de la street food traditionnelle chinoise, la sp�
                 st.enter_context(mock.patch.object(pipeline, "ask", side_effect=seq))
             return self.run_analyze(info(texte))
 
+    def test_nom_dit_et_lu_a_l_ecran(self):  # « Honoré » entendu + « HONORÉ » sur l'enseigne : pas « entendu seulement »
+        web = [{"titre": "Honoré - restaurant Marseille", "lien": "https://www.thefork.fr/r/1", "extrait": "Restaurant Honoré, 21 rue de la Paix Marcel Paul, 13001 Marseille"}]
+        res = self.video([{"nom": "Honoré", "ville": "Marseille", "_src": "voix"}, {"nom": "HONORÉ", "ville": "Marseille", "_src": "image"}],
+                         speech="on va aller chez Honoré", texte="Camille Lavabre", web=web)
+        self.assertEqual([r["nom"] for r in res], ["Honoré"])
+        self.assertTrue(res[0]["adresse"].startswith("21 rue de la Paix"))
+
     def test_video_nom_entendu_invente_ou_inconnu_ecarte(self):
         res = self.video([{"nom": "Bouillon Chartier", "ville": "Paris", "_src": "voix"},   # pas dans la transcription (OSM le connait pourtant)
                           {"nom": "lieu historique", "ville": "Paris", "_src": "voix"},     # dans la transcription, mais inconnu partout
@@ -398,7 +407,7 @@ Adresse cachée à Châtelet : de la street food traditionnelle chinoise, la sp�
     def test_web_majuscules_puis_sans_guillemets(self):  # « HONORÉ » : 0 resultat ; « "Honoré" » entre guillemets : 0 ; sans guillemets : trouve
         qs = []
 
-        def web(q, region="fr-fr"):
+        def web(q, region="fr-fr", dire=None):
             qs.append(q)
             return [] if '"' in q else [{"titre": "Honoré Marseille", "lien": "https://exemple.test/h", "extrait": "Honoré, 28A Cours Estienne d'Orves, 13001 Marseille"}]
         res = self.video([{"nom": "HONORÉ", "ville": "MARSEILLE", "_src": "image"}], texte="L'adresse de Camille Lavabre a Marseille", web_fn=web,
@@ -440,7 +449,7 @@ Adresse cachée à Châtelet : de la street food traditionnelle chinoise, la sp�
     def test_honore_la_personne_du_titre_est_ignoree(self):  # vrai cas : la legende ne nomme qu'une personne, le restaurant est a l'ecran
         qs = []
 
-        def web(q, region="fr-fr"):
+        def web(q, region="fr-fr", dire=None):
             qs.append(q)
             return [dict(r) for r in self.HONORE_WEB["web"]]
         res = self.video([{"nom": "HONORÉ", "ville": "Marseille", "_src": "image"}, {"nom": "Benjamin Mathieu", "ville": "Marseille", "_src": "voix"}],
@@ -560,32 +569,35 @@ class Banc(unittest.TestCase):  # calcul du score du banc d'essai (bench/bench.p
         self.assertEqual(self.b.score({**cas, "partiel": True}, res, coords)["faux_positifs"], [])  # liste incomplete : pas de fiche « en trop »
 
 
-class OpenRouter(unittest.TestCase):  # IA en ligne (modeles gratuits), avec repli sur l'IA locale
+class OpenRouter(unittest.TestCase):  # IA en ligne (modeles gratuits) ; sans elle, les regles
     def setUp(self):
         p = mock.patch.dict(os.environ, {"TP_LLM": "openrouter", "OPENROUTER_API_KEY": "cle-de-test"}); p.start(); self.addCleanup(p.stop)
         q = mock.patch.object(pipeline, "lit_images", return_value=None); q.start(); self.addCleanup(q.stop)  # jamais le vrai catalogue
-        pipeline.STATS.update(openrouter=0, repli=0, local=0, quota_jour=0)
+        pipeline.STATS.update(openrouter=0, echecs=0, quota_jour=0)
         pipeline.STATS_MODELES.clear(); pipeline._or_pause.clear()
 
-    def local(self, sortie):  # IA locale simulee
-        return mock.patch.object(pipeline, "run", return_value=mock.Mock(stdout=sortie))
-
     def test_openrouter_repond(self):
-        with mock.patch.object(pipeline, "ask_openrouter", return_value=('```json\n[{"nom": "Farfalou"}]\n```', "x/modele:free")), \
-             mock.patch.object(pipeline, "run", side_effect=AssertionError("pas d'IA locale")):
+        with mock.patch.object(pipeline, "ask_openrouter", return_value=('```json\n[{"nom": "Farfalou"}]\n```', "x/modele:free")):
             self.assertEqual(pipeline.ask("consigne"), [{"nom": "Farfalou"}])
         self.assertEqual(pipeline.STATS["openrouter"], 1)
 
-    def test_repli_sur_l_ia_locale(self):  # quota atteint (429) : l'analyse continue avec Qwen en local
+    def test_indisponible_l_analyse_continue_sans_ia(self):  # quota, panne : l'appelant retombe sur les regles
         err = urllib.error.HTTPError(pipeline.OR_URL, 429, "Rate limit exceeded", {}, None)
-        with mock.patch.object(pipeline, "ask_openrouter", side_effect=err), self.local('[{"nom": "Local"}]'):
-            self.assertEqual(pipeline.ask("consigne"), [{"nom": "Local"}])
-        self.assertEqual((pipeline.STATS["repli"], pipeline.STATS["local"]), (1, 1))
+        with mock.patch.object(pipeline, "ask_openrouter", side_effect=err), self.assertRaises(RuntimeError):
+            pipeline.ask("consigne")
+        self.assertEqual(pipeline.STATS["echecs"], 1)
+        with mock.patch.object(pipeline, "ask_openrouter", side_effect=err):
+            self.assertIsNone(pipeline.llm_extract("Mon spot du moment : chez Farfalou, Marseille, sandwich poulpe 12€"))  # -> regles
 
-    def test_sans_cle_ia_locale(self):
-        with mock.patch.object(pipeline, "or_cle", return_value=""), mock.patch.object(pipeline, "ask_openrouter", side_effect=AssertionError("pas sans cle")), \
-             self.local("[]"):
-            self.assertEqual(pipeline.ask("consigne"), [])
+    def test_sans_cle_pas_d_ia(self):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}), mock.patch.object(pipeline, "ask_openrouter", side_effect=AssertionError("pas sans cle")):
+            with self.assertRaises(RuntimeError):
+                pipeline.ask("consigne")
+
+    def test_tp_llm_0(self):
+        with mock.patch.dict(os.environ, {"TP_LLM": "0"}), mock.patch.object(pipeline, "ask_openrouter", side_effect=AssertionError("desactivee")):
+            with self.assertRaises(RuntimeError):
+                pipeline.ask("consigne")
 
     def test_requete_envoyee(self):  # images de la video + routeur gratuit + cle dans l'en-tete
         envoye = {}
@@ -623,11 +635,11 @@ class OpenRouter(unittest.TestCase):  # IA en ligne (modeles gratuits), avec rep
         self.assertEqual((modele, [c["model"] for c in envoye]), ("google/gemma-4-26b-a4b-it:free", ["nvidia/nemotron-3.5-super-vl:free", "google/gemma-4-26b-a4b-it:free"]))
         self.assertTrue(envoye[0]["max_tokens"] >= 2000 and envoye[0]["reasoning"] == {"effort": "low"})
 
-    def test_tout_vide_repli_local(self):  # aucune reponse exploitable : l'IA locale prend le relais (et non « aucun restaurant »)
+    def test_tout_echoue(self):  # aucune reponse exploitable : erreur (et non « aucun restaurant »)
         envoye, p = self.reponses(["", urllib.error.HTTPError(pipeline.OR_URL, 429, "quota", {}, None)])
-        with p, mock.patch.dict(os.environ, {"TP_OR_MODELES": "a:free,b:free"}), self.local('[{"nom": "Local"}]'):
-            self.assertEqual(pipeline.ask("consigne"), [{"nom": "Local"}])
-        self.assertEqual((pipeline.STATS["repli"], len(envoye)), (1, 2))
+        with p, mock.patch.dict(os.environ, {"TP_OR_MODELES": "a:free,b:free"}), self.assertRaises(RuntimeError):
+            pipeline.ask("consigne")
+        self.assertEqual((pipeline.STATS["echecs"], len(envoye)), (1, 2))
 
     def test_liste_par_defaut(self):  # modeles_openrouter.txt : l'ordre choisi, le routeur gratuit en dernier
         with mock.patch.dict(os.environ, {"TP_OR_MODELES": ""}):
@@ -696,10 +708,25 @@ class OpenRouter(unittest.TestCase):  # IA en ligne (modeles gratuits), avec rep
         self.assertIsNone(pipeline.json_ok("Je ne vois aucun nom."))
         self.assertIsNone(pipeline.json_ok('[{"nom": "A",'))
 
-    def test_ia_indisponible_n_arrete_pas_la_video(self):  # sans repli local : la lecture echoue, l'analyse continue
-        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x"); (d / "a.txt").write_text("on va chez bouillon")
+    def test_ia_indisponible_n_arrete_pas_la_video(self):  # OpenRouter indisponible : la lecture echoue, l'analyse continue
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x"); (d / "a.txt").write_text("on va chez bouillon"); (d / "a.modele").write_text(pipeline.WHISPER)
         with mock.patch.object(pipeline, "ask", side_effect=RuntimeError("OpenRouter indisponible")):
             self.assertEqual(pipeline.video_stage("https://youtube.com/shorts/x", d, "", lambda s: None), ([], "on va chez bouillon"))
+
+    def test_transcription_d_un_autre_modele_refaite(self):  # passage de whisper-small a large-v3-turbo
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x"); (d / "a.txt").write_text("on va chez ishin")  # faite par small
+        cmds = []
+
+        def run(cmd, *a, **k):
+            cmds.append([str(c) for c in cmd])
+            if "mlx_whisper" in cmds[-1][0]:
+                (d / "a.txt").write_text("on va chez isshin")
+            return mock.Mock(stdout="")
+        with mock.patch.object(pipeline, "run", run), mock.patch.object(pipeline, "ask", return_value=[]):
+            _, speech = pipeline.video_stage("https://youtube.com/shorts/x", d, "", lambda s: None)
+        self.assertEqual(speech, "on va chez isshin")
+        self.assertIn(pipeline.WHISPER, cmds[-1])
+        self.assertEqual((d / "a.modele").read_text(), "mlx-community/whisper-large-v3-turbo")
 
     def test_lit_images_depuis_le_catalogue(self):
         cat = {"data": [{"id": "g/vision:free", "architecture": {"input_modalities": ["text", "image"]}}, {"id": "t/texte:free", "architecture": {"input_modalities": ["text"]}}]}
@@ -739,7 +766,7 @@ class Voix(unittest.TestCase):  # cas reels du banc OpenRouter (sushi-saint-mart
     def test_nom_entendu_confirme_par_un_lieu_ou_l_on_mange(self):
         res = {"\"chez Gonard\" Marseille adresse": [{"titre": "GONNARD Plomberie", "lien": "https://annuaire.fr/1", "extrait": "Gonard, 116 avenue de la Timone, 13010 Marseille"}],
                "\"Ishin ramen\" Bordeaux adresse": [{"titre": "Isshin Ramen - TheFork", "lien": "https://www.thefork.fr/r/1", "extrait": "Restaurant japonais, 12 rue Sainte-Catherine, 33000 Bordeaux"}]}
-        with mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr": res.get(q, [])), mock.patch.object(pipeline, "ask", return_value=[]), \
+        with mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr", dire=None: res.get(q, [])), mock.patch.object(pipeline, "ask", return_value=[]), \
              mock.patch.object(pipeline, "WEB_CACHE", pathlib.Path(tempfile.mkdtemp()) / "w.json"), mock.patch.object(pipeline, "WEB_PAUSE", 0):
             out = pipeline.web_addresses([{"nom": "chez Gonard", "ville": "Marseille", "voix": True}, {"nom": "Ishin ramen", "ville": "Bordeaux", "voix": True}])
         self.assertIsNone(out[0])  # un plombier homonyme ne confirme pas un restaurant
@@ -759,10 +786,49 @@ class AdresseWeb(unittest.TestCase):  # cas ishin : l'IA ajoute la ville, l'extr
 
     def test_extrait_coupe_aux_deux_points(self):
         hit = [{"titre": "Isshin Ramen - menu", "lien": "https://isshinramen.com/menu", "extrait": "22 Rue Fernand Philippart : ramens, donburi, entrées, avec les prix"}]
-        with mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr": hit), mock.patch.object(pipeline, "ask", return_value=[]), \
+        with mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr", dire=None: hit), mock.patch.object(pipeline, "ask", return_value=[]), \
              mock.patch.object(pipeline, "WEB_CACHE", pathlib.Path(tempfile.mkdtemp()) / "w.json"), mock.patch.object(pipeline, "WEB_PAUSE", 0):
             out = pipeline.web_addresses([{"nom": "Isshin Ramen", "ville": "Bordeaux"}])
         self.assertEqual(out[0]["adresse"], "22 Rue Fernand Philippart")
+
+
+class Toulouse(unittest.TestCase):  # « Les Thermes Kongfu Pâtes » : la 1re recherche ne donne aucune adresse, la 2e oui
+    def test_recherche_suivante_si_pas_d_adresse(self):
+        res = {'"Les Thermes Kongfu Pâtes" Toulouse adresse': [{"titre": "Les Thermes Kongfu Pâtes", "lien": "https://a.fr/1", "extrait": "Nouilles tirees a la main, avis."}],
+               "Les Thermes Kongfu Pâtes Toulouse restaurant adresse": [{"titre": "LES THERMES KONGFU PÂTE", "lien": "https://b.fr/2", "extrait": "Les Thermes Kongfu Pâtes, 2 Rue Castellane 31000 TOULOUSE"}]}
+        vus = []
+        with mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr", dire=None: vus.append(q) or res.get(q, [])), mock.patch.object(pipeline, "ask", return_value=[]), \
+             mock.patch.object(pipeline, "WEB_CACHE", pathlib.Path(tempfile.mkdtemp()) / "w.json"), mock.patch.object(pipeline, "WEB_PAUSE", 0):
+            out = pipeline.web_addresses([{"nom": "Les Thermes Kongfu Pâtes", "ville": "Toulouse"}])
+        self.assertEqual(len(vus), 2)
+        self.assertTrue(out[0]["adresse"].startswith("2 Rue Castellane"))
+
+
+class PageWeb(unittest.TestCase):  # l'adresse n'est pas dans l'extrait de recherche, mais dans la page
+    def page(self, contenu):
+        return mock.patch("urllib.request.urlopen", lambda req, timeout=None: mock.Mock(read=lambda n=None: contenu.encode()))
+
+    def test_texte_de_la_page(self):
+        with self.page("<html><h1>LES THERMES KONGFU PÂTE</h1><p>Restauration</p><p>2 Rue Castellane 31000 TOULOUSE</p><p>07 69 65 38 88</p></html>"):
+            self.assertEqual(pipeline.adresse_page("https://visit-occitanie.com/x", "Les Thermes Kongfu Pâtes", "Toulouse"), "2 Rue Castellane 31000 TOULOUSE")  # « Pâtes » / « PÂTE »
+        self.assertTrue(pipeline.cite("Les Thermes Kongfu Pâtes", "LES THERMES KONGFU PÂTE - Toulouse"))
+
+    def test_json_ld(self):
+        with self.page('<script type="application/ld+json">{"name":"Les Thermes Kongfu Pâte","address":{"streetAddress":"2 Rue Castellane","postalCode":"31000"}}</script> Toulouse'):
+            self.assertEqual(pipeline.adresse_page("https://annuaire.fr/x", "Les Thermes Kongfu Pâte", "Toulouse"), "2 Rue Castellane, 31000 Toulouse")
+
+    def test_page_d_un_autre_restaurant(self):
+        with self.page("<p>Les Thermes de Toulouse, 44 Boulevard Lazare Carnot 31000 TOULOUSE</p>"):
+            self.assertIsNone(pipeline.adresse_page("https://annuaire.fr/y", "Les Thermes Kongfu Pâte", "Toulouse"))
+        self.assertIsNone(pipeline.adresse_page("https://www.pagesjaunes.fr/pros/1", "X", "Toulouse"))  # bloque les robots : pas ouverte
+
+
+class Hashtags(unittest.TestCase):  # « Bonne adresse à Toulouse - Dozo 📍 #bonneadresse #food #toulouse »
+    def test_pin_suivi_de_hashtags_n_est_pas_une_adresse(self):
+        p = pipeline.parse_caption("Bonne adresse à Toulouse - Dozo 📍 #bonneadresse #food #toulouse #restaurant\n\nJulie & Co")
+        self.assertEqual(p["adresses"], [])
+        self.assertNotIn("#", p["nom"] or "")
+        self.assertEqual(pipeline.parse_caption("📍 12 rue de Metz, Toulouse #food")["adresses"], ["12 rue de Metz, Toulouse"])
 
 
 class EnPassant(unittest.TestCase):  # seulement les restaurants que la video presente
@@ -802,7 +868,7 @@ class BancModeles(unittest.TestCase):  # bench/modeles.py : note, classement, or
     def test_memes_donnees_pour_tous(self):  # OSM et web interroges une seule fois pour tous les modeles
         appels = []
         with mock.patch.object(pipeline, "nominatim", lambda params: appels.append(params) or [{"lat": "1"}]), \
-             mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr": appels.append(q) or []), \
+             mock.patch.object(pipeline, "web_search", lambda q, region="fr-fr", dire=None: appels.append(q) or []), \
              mock.patch.object(pipeline, "DATA", pathlib.Path(tempfile.mkdtemp())):
             self.m.memoriser()
             for _ in range(3):

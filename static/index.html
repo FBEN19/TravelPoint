@@ -161,7 +161,7 @@ function card(p){
     ${p.tel?`<a href="tel:${esc(p.tel.replace(/[^+\d]/g,''))}">${esc(p.tel)}</a>`:''}
     ${src?`<a target="_blank" rel="noopener" href="${esc(src)}">Vidéo ↗</a>`:''}
     ${safeUrl(p.source_web)?`<a target="_blank" rel="noopener" href="${esc(safeUrl(p.source_web))}" title="Page où l’adresse a été trouvée">Source ↗</a>`:''}
-    <button class="lnk" data-edit="${p.id}">Modifier</button>${['a_verifier','moyenne'].includes(p.confiance)?`<button class="lnk" data-ok="${p.id}">C’est bon</button>`:''}</div>
+    <button class="lnk" data-edit="${p.id}">Modifier</button>${src?`<button class="lnk" data-re="${esc(p.url)}" title="Relancer l’analyse de la vidéo avec la dernière version de l’app">Réanalyser</button>`:''}${['a_verifier','moyenne'].includes(p.confiance)?`<button class="lnk" data-ok="${p.id}">C’est bon</button>`:''}</div>
     <div class="foot"><label><input type="checkbox" data-done="${p.id}" ${p.done?'checked':''}> J’y suis allé</label>
     <textarea data-note="${p.id}" rows="1" maxlength="2000" placeholder="Note perso…">${esc(p.note)}</textarea></div></div>`;
 }
@@ -258,6 +258,9 @@ document.addEventListener('click',async e=>{
   if(d.ok){await send('/places/'+d.ok,'PATCH',{verifie:true});await load()}
   if(d.del&&confirm('Supprimer ce restaurant ?')){if(sel===d.del)sel=null;if(editing===d.del)editing=draft=null;await api('/places/'+d.del,{method:'DELETE'});await load()}
   if(d.retry){await send('/analyze','POST',{url:d.retry});await poll()}
+  if(d.re&&confirm('Réanalyser cette vidéo ?\n\nLes fiches de cette vidéo sont remplacées par le nouveau résultat, sauf celles que tu as modifiées, cochées ou annotées.')){
+    t.disabled=true;t.textContent='Analyse…';
+    try{await send('/analyze','POST',{url:d.re,force:true});await poll();await load()}catch(err){alert(err);t.disabled=false;t.textContent='Réanalyser'}}
   if(d.close){await api('/jobs/'+d.close,{method:'DELETE'});await poll()}
   const c=t.closest('.card.geo');  // clic sur la fiche (hors liens, boutons, case, note) = selection
   if(c&&!t.closest('a,button,input,textarea,label,.edit')&&markers[c.id.slice(2)])select(c.id.slice(2),true);

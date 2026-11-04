@@ -1,7 +1,7 @@
 # Travelpoint (restaurants)
 
 Colle un lien TikTok / Instagram / YouTube : l'app retrouve les restaurants montrés (adresse, horaires, prix, cuisine) et les range par ville sur une carte.
-Tout tourne en local sur le Mac (Qwen3-VL + Whisper via MLX). Aucune clé API.
+L'IA passe par OpenRouter (modeles gratuits, cle dans `data/openrouter.key`) ; la voix est transcrite en local par Whisper (MLX).
 
 ## Installation (une fois)
 ```bash
@@ -20,7 +20,7 @@ Puis ouvre http://localhost:8420. Au premier lien analysé via la video, ~3,5 Go
 
 ## Comment ca marche
 1. **Legende du post** (yt-dlp, sans telecharger la video) : nom, adresses, prix, horaires -> verification OpenStreetMap. Quelques secondes.
-2. Si la legende ne donne rien : **video** (Whisper pour la voix, Qwen3-VL pour les images), ~1 min.
+2. Si la legende ne donne rien : **video** (Whisper pour la voix, images lues par OpenRouter), ~1 min.
 Les analyses passent une par une (8 Go de RAM). Un lien deja analyse n'est pas relu.
 
 ## Corriger une fiche
@@ -40,7 +40,7 @@ Variable optionnelle : `TP_COOKIES_BROWSER=chrome` pour lire les cookies d'un na
 
 ## Donnees
 `data/travelpoint.db` (SQLite) et `data/jobs/<lien>/` (legende, video, transcription en cache). Supprime `data/` pour tout remettre a zero.
-Reglages : `TP_VLM`, `TP_WHISPER` (autres modeles), `TP_DATA` (dossier de donnees).
+Reglages : `TP_WHISPER` (modele de transcription, par defaut `mlx-community/whisper-large-v3-turbo`), `TP_DATA` (dossier de donnees).
 
 ## Dans le monde entier
 Les lieux sont cherches sur OpenStreetMap **autour de l'adresse** (ou de la ville citee), pas par texte : ca marche avec n'importe quel pays et
@@ -50,12 +50,12 @@ En cas de souci, lance avec `TP_DEBUG=1 uvicorn app:app --port 8420` : chaque re
 
 ## Une video n'est analysee qu'une fois
 Chaque lien est ramene a l'identifiant de la video (YouTube, Instagram, TikTok) : `?si=`, `utm_`, `igsh`, `/shorts/` ou `/watch`, `www.`... ne changent rien.
-Si tu recolles la meme video, meme avec un lien different, l'app ne relance ni telechargement, ni Whisper, ni Qwen : elle te montre les restaurants deja trouves.
+Si tu recolles la meme video, meme avec un lien different, l'app ne relance ni telechargement, ni Whisper, ni IA : elle te montre les restaurants deja trouves.
 Le resultat est garde dans `data/jobs/<video>/result.json`. Une analyse terminee ne peut pas etre supprimee depuis la page (seules les erreurs, via « Fermer »).
 Pour forcer une nouvelle analyse : recolle le lien puis OK dans la fenetre « reanalyser quand meme ». Les fiches modifiees, testees ou annotees sont conservees.
 
 ## Legendes de tous les formats
-Les posts n'ont aucune structure commune : l'IA locale (Qwen3-VL) lit donc la legende telle quelle et releve les etablissements, leurs offres, adresses et horaires.
+Les posts n'ont aucune structure commune : l'IA (OpenRouter) lit donc la legende telle quelle et releve les etablissements, leurs offres, adresses et horaires.
 Garde-fou : un nom, une adresse ou une offre qui n'est pas ECRIT dans le texte est ecarte (l'IA ne peut pas en inventer), puis OpenStreetMap confirme que le lieu existe.
 Si l'IA est indisponible ou ne trouve rien, de simples regles (📍, @pseudos, adresses) prennent le relais. `TP_LLM=0` desactive l'IA ; `TP_DEBUG=1` montre sa reponse brute.
 Ce qui est mal lu se corrige a la main avec « Modifier ».
@@ -77,9 +77,9 @@ restaurant trouve (nom), adresse juste (marqueur a moins de 300 m), bonne ville,
 Compter environ 1 min par lien quand la video doit etre analysee ; 15 s d'attente entre deux liens Instagram pas encore telecharges.
 
 ## IA en ligne : OpenRouter (modeles gratuits)
-Par defaut l'IA tourne en local (Qwen3-VL 4B). Pour utiliser les modeles gratuits d'OpenRouter, plus gros et sans chargement :
+L'IA (lecture des legendes, des images et des resultats web) passe par les modeles gratuits d'OpenRouter :
 1. Cree une cle sur openrouter.ai, puis mets-la dans `data/openrouter.key` (ignore par git) ou dans la variable `OPENROUTER_API_KEY`.
-2. Lance avec `TP_LLM=openrouter uvicorn app:app --port 8420` (ou `TP_LLM=openrouter python bench/bench.py`).
+2. Lance normalement : `uvicorn app:app --port 8420` (ou `python bench/bench.py`). Sans cle, l'app previent au demarrage et n'utilise que les regles simples.
 - Modeles : ta liste (voir ci-dessous), avec en dernier `openrouter/free`, le routeur des modeles gratuits.
   Ordre d'essai : `modeles_openrouter.txt` (une ligne par modele). Un modele qui echoue (erreur, quota, reponse vide ou sans JSON) passe la main
   au suivant ; « aucun restaurant » (`[]`) est une vraie reponse et s'arrete la. Pour la lecture des images de la video, les modeles
@@ -87,8 +87,8 @@ Par defaut l'IA tourne en local (Qwen3-VL 4B). Pour utiliser les modeles gratuit
   La trace de chaque analyse dit quel modele a repondu.
 - Une video est envoyee sous forme de 12 images reparties sur toute sa duree. La voix reste transcrite en local par Whisper.
 - Limites des modeles gratuits : 20 requetes/minute, 1 000 par jour (une fois 10 $ de credits achetes). Si OpenRouter est sature ou en panne,
-  l'app repasse automatiquement sur l'IA locale (`TP_OR_REPLI=0` pour l'interdire). Le rapport du banc dit combien de lectures ont ete faites par chaque IA.
-- **Comparer les modeles** : `python bench/modeles.py` fait passer chaque modele seul (sans repli local) sur 8 cas du banc
+  l'analyse continue sans IA, avec les regles simples (moins de restaurants trouves). Le rapport du banc dit combien de lectures ont reussi ou echoue.
+- **Comparer les modeles** : `python bench/modeles.py` fait passer chaque modele seul (sans les autres en secours) sur 8 cas du banc
   et les classe : restaurants trouves, adresses justes, fiches en trop, reponses utiles / vides / illisibles, temps par reponse.
   Rapport `bench/modeles.md`, historique `bench/modeles.csv`. `--appliquer` reecrit `modeles_openrouter.txt` dans l'ordre du classement ;
   `--modeles a,b` / `--cas tous` pour choisir. Environ 3 requetes par cas et par modele : surveille le quota de 1 000 par jour.
