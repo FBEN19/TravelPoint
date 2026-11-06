@@ -1,6 +1,6 @@
-# Banc d'essai Travelpoint — 2026-11-04 08:47 (commit d0fd68a)
+# Banc d'essai Travelpoint — 2026-11-04 10:14 (commit 0dbf3ba)
 
-IA : **OpenRouter (nvidia/nemotron-3.5-super-vl:free, cohere/north-mini-code:free, nvidia/nemotron-3-ultra-550b-a55b:free, dots-studio/dots-3-note-preview:free, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free, xingchen-agi/xing4.0-29b-a4b:free, openrouter/free)** — lectures : 33 reussies, 0 echouees (tous les modeles indisponibles)
+IA : **OpenRouter (nvidia/nemotron-3.5-super-vl:free, cohere/north-mini-code:free, nvidia/nemotron-3-ultra-550b-a55b:free, dots-studio/dots-3-note-preview:free, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free, xingchen-agi/xing4.0-29b-a4b:free, openrouter/free)** — lectures : 32 reussies, 0 echouees (tous les modeles indisponibles)
 
 Score sur les **15 cas verifies** :
 
@@ -9,34 +9,36 @@ Score sur les **15 cas verifies** :
 - Bonne ville : 20/20 (100 %)
 - Faux positifs (fiches en trop) : 0
 - Noms qui ressemblent a une adresse : 0
-- Erreurs : 0 — Duree totale : 708 s (moyenne 42 s par lien)
+- Erreurs : 0 — Duree totale : 901 s (moyenne 53 s par lien)
 
 Modeles OpenRouter (dans l'ordre d'essai) :
 
 | Modele | Appels | Reponses utiles | Vides | Illisibles | Erreurs | Quota | Sautes (images) | Temps moyen |
 |---|---|---|---|---|---|---|---|---|
-| nvidia/nemotron-3.5-super-vl:free | 33 | 30 | 3 | 0 | 0 | 0 | 0 | 8.9 s |
-| cohere/north-mini-code:free | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 16.5 s |
+| nvidia/nemotron-3.5-super-vl:free | 32 | 27 | 5 | 0 | 0 | 0 | 0 | 9.0 s |
+| cohere/north-mini-code:free | 4 | 3 | 1 | 0 | 0 | 0 | 1 | 21.6 s |
+| nvidia/nemotron-3-ultra-550b-a55b:free | 1 | 0 | 1 | 0 | 0 | 0 | 1 | — |
+| dots-studio/dots-3-note-preview:free | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 21.8 s |
 
 | Cas | Trouves | Adresses | En trop | Duree | Remarque |
 |---|---|---|---|---|---|
-| red-noodle | 2/2 | 2/2 | 0 | 29 s |  |
-| yukga | 1/1 | 1/1 | 0 | 14 s |  |
-| compass | 2/2 | 0/0 | 0 | 52 s |  |
-| holyburek | 1/1 | 1/1 | 0 | 12 s |  |
-| madameguan | 4/4 | 4/4 | 0 | 33 s |  |
-| sushi-saint-martin | 1/1 | 1/1 | 0 | 25 s |  |
-| slak | 1/1 | 0/0 | 0 | 9 s |  |
-| osaka-crepe | 1/1 | 1/1 | 0 | 16 s |  |
+| red-noodle | 2/2 | 2/2 | 0 | 40 s |  |
+| yukga | 1/1 | 1/1 | 0 | 13 s |  |
+| compass | 2/2 | 0/0 | 0 | 70 s |  |
+| holyburek | 1/1 | 1/1 | 0 | 14 s |  |
+| madameguan | 4/4 | 4/4 | 0 | 35 s |  |
+| sushi-saint-martin | 1/1 | 1/1 | 0 | 17 s |  |
+| slak | 1/1 | 0/0 | 0 | 8 s |  |
+| osaka-crepe | 1/1 | 1/1 | 0 | 14 s |  |
 | bertoni | 1/1 | 1/1 | 0 | 10 s |  |
-| longue-vie | 1/1 | 1/1 | 0 | 19 s |  |
-| royal-buffet | 1/1 | 0/0 | 0 | 28 s |  |
-| honore | 1/1 | 1/1 | 0 | 50 s |  |
-| ishin | 1/1 | 0/0 | 0 | 71 s |  |
-| thermes-kongfu | 1/1 | 1/1 | 0 | 42 s |  |
-| dozo | 1/1 | 1/1 | 0 | 22 s |  |
-| brasseries-paris | 3/3 | 0/0 | 0 | 65 s | à confirmer |
-| tokyo-5 | 2/3 | 0/0 | 0 | 213 s | à confirmer |
+| longue-vie | 1/1 | 1/1 | 0 | 16 s |  |
+| royal-buffet | 1/1 | 0/0 | 0 | 46 s |  |
+| honore | 1/1 | 1/1 | 0 | 89 s |  |
+| ishin | 1/1 | 0/0 | 0 | 105 s |  |
+| thermes-kongfu | 1/1 | 1/1 | 0 | 52 s |  |
+| dozo | 1/1 | 1/1 | 0 | 23 s |  |
+| brasseries-paris | 3/3 | 0/0 | 0 | 49 s | à confirmer |
+| tokyo-5 | 2/3 | 0/0 | 0 | 299 s | à confirmer |
 
 ## Detail
 
@@ -65,7 +67,7 @@ https://www.instagram.com/reel/DWFBjl9Df38/
 ### madameguan — Concours ; 1 enseigne (@madameguan) et 4 adresses en liste
 https://www.instagram.com/reel/DK7MbO9t16b/
 
-- ✅ attendu **Madame Guan** (63 Rue Saint-Martin, 75004 Paris) → Madameguan (a_verifier, 📍), a 2 m
+- ✅ attendu **Madame Guan** (63 Rue Saint-Martin, 75004 Paris) → Madameguan (a_verifier, 📍), a 0 m
 - ✅ attendu **Madame Guan** (50 Rue Godefroy Cavaignac, 75011 Paris) → Madameguan (a_verifier, 📍), a 0 m
 - ✅ attendu **Madame Guan** (13 Rue des Canettes, 75006 Paris) → Madameguan (a_verifier, 📍), a 0 m
 - ✅ attendu **Madame Guan** (33 Rue du Rocher, 75008 Paris) → Madameguan (a_verifier, 📍), a 0 m
@@ -103,7 +105,7 @@ https://youtube.com/shorts/A3j_h6ruV-Y
 ### honore — Nom a l'ecran (« HONORÉ »), titre = une personne (Camille Lavabre) ; a demenage au 21 rue de la Paix Marcel Paul
 https://youtube.com/shorts/F01sNpJzZeo
 
-- ✅ attendu **Honoré** (21 Rue de la Paix Marcel Paul, 13001 Marseille) → Honoré (moyenne, 📍), a 0 m
+- ✅ attendu **Honoré** (21 Rue de la Paix Marcel Paul, 13001 Marseille) → HONORÉ (moyenne, 📍), a 0 m
 
 ### ishin — Nom a l'oral (« Ishin » pour Whisper), ecrit « Isshin » sur l'enseigne, ville dans le titre
 https://www.youtube.com/shorts/gdCeQctM9Uw
@@ -123,13 +125,13 @@ https://www.youtube.com/shorts/1-i3Xcgpjlw
 ### brasseries-paris — 3 brasseries : Comme un Bouillon (a l'oral), les 2 autres lues a l'ecran - A CONFIRMER
 https://youtube.com/shorts/vM8C-TWZD1s
 
-- ✅ attendu **Comme un Bouillon** (Paris) → BOUILLON (moyenne, 📍)
-- ✅ attendu **La Cantine Diderot** (Paris) → Cantina Diderot (a_verifier, sans position)
+- ✅ attendu **Comme un Bouillon** (Paris) → Comme Un Bouillon (haute, 📍)
+- ✅ attendu **La Cantine Diderot** (Paris) → La Cantine Diderot (haute, 📍)
 - ✅ attendu **Le Vaudésir** (Paris) → Le Vaudésir (haute, 📍)
 
 ### tokyo-5 — 5 adresses a l'oral, liste incomplete - A COMPLETER (Hanbei vient de l'app, non verifie)
 https://youtube.com/shorts/rkTW4iFMeQI
 
 - ❌ attendu **Commune** (Tokyo) → —
-- ✅ attendu **Riverside Club** (Tokyo) → le Riverside Club (moyenne, 📍)
+- ✅ attendu **Riverside Club** (Tokyo) → le Riverside Club (a_verifier, sans position)
 - ✅ attendu **Hanbei** (Tokyo) → Hanbei (haute, 📍)

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autour de moi · Travelpoint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" crossorigin="anonymous">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+:root{--pine:#1f4a3a;--pine-d:#153429;--pine-m:#4f7565;--pine-l:#e3ece6;--paper:#f6f2e8;--card:#fcfaf4;--line:#ddd5c2;--ink:#1d2a24;--muted:#545e58;--clay:#b5532f;--clay-t:#7a3519;--clay-l:#f3e2d8;--err:#9e2a1f;--pts:#b9ae95}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.5 Archivo,'Helvetica Neue',Arial,sans-serif}
+:focus-visible{outline:3px solid var(--pine);outline-offset:2px}
+a{color:var(--pine);text-underline-offset:4px}
+button{font:700 15px Archivo,sans-serif;cursor:pointer}
+.bi{line-height:1;vertical-align:-.125em}
+button .bi,a .bi{pointer-events:none}
+
+/* bandeau */
+.bandeau{background:var(--pine);color:var(--paper)}
+.in{max-width:1240px;margin:0 auto;padding:0 24px}
+.bandeau .in{display:flex;align-items:center;gap:8px 20px;flex-wrap:wrap;padding-top:12px;padding-bottom:12px}
+.bandeau h1{margin:0;font-weight:800;font-stretch:80%;font-size:26px;line-height:1;letter-spacing:-.01em}
+.bandeau h1 a{color:var(--paper);text-decoration:none;display:inline-flex;align-items:center;gap:10px}
+.compte{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;font-size:15px}
+.compte a,.compte button{color:var(--paper);font:inherit;font-weight:700;background:none;border:0;padding:8px 0;cursor:pointer;text-decoration:underline;text-underline-offset:4px}
+.compte .bi{margin-right:6px}
+.bandeau :focus-visible{outline-color:var(--paper)}
+
+/* titre */
+.ajout{background:var(--pine-l);border-bottom:1px solid #c9dccf}
+.ajout .in{padding-top:22px;padding-bottom:22px;display:flex;flex-direction:column;gap:6px}
+.tag{margin:0;font-weight:800;font-stretch:70%;font-size:clamp(28px,4vw,46px);line-height:1;letter-spacing:-.005em;color:var(--pine)}
+.sous{margin:0;color:var(--muted);font-size:17px}
+
+.wrap{max-width:1240px;margin:0 auto;padding:20px 24px 72px}
+.etat{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:15px;margin-bottom:6px}
+.etat .msg{flex:1;min-width:16ch}
+.etat.ko{border-color:#d9b3a2;background:var(--clay-l)}
+.etat.ko .msg{color:var(--clay-t);font-weight:700}
+.spin{width:16px;height:16px;border:2.5px solid var(--pine-l);border-top-color:var(--pine);border-radius:50%;animation:s .9s linear infinite;flex:none}
+@keyframes s{to{transform:rotate(360deg)}}
+.go{background:var(--pine);color:#fff;border:0;border-radius:999px;padding:0 18px;min-height:40px;display:inline-flex;align-items:center;gap:8px;transition:background .15s}
+.go:hover{background:var(--pine-d)}
+
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0 18px}
+.bar .lbl{flex:none;white-space:nowrap;font-size:15px;color:var(--muted);margin-right:4px}
+.tab{background:none;border:1.5px solid var(--line);border-radius:999px;padding:0 16px;min-height:44px;color:var(--ink);font:500 15px Archivo,sans-serif}
+.tab:hover{border-color:var(--pine-m)}
+.tab.on{background:var(--pine);border-color:var(--pine);color:#fff}
+
+.layout{display:grid;grid-template-columns:1fr;gap:20px}
+#map{order:-1;height:46vh;min-height:260px;border-radius:12px;border:1px solid var(--line);background:var(--pine-l);z-index:0}
+@media(min-width:920px){
+  .layout{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr)}
+  #map{order:0;position:sticky;top:16px;height:calc(100vh - 32px)}
+}
+.leaflet-tile-pane{filter:saturate(.7) sepia(.14)}
+.leaflet-popup-content-wrapper{border-radius:10px;font-family:Archivo,sans-serif}
+.pin{background:none;border:0}
+.pin svg{display:block;filter:drop-shadow(0 3px 2px rgba(21,52,41,.4));transition:transform .15s}
+.pin path{fill:var(--pine)}
+.pin.sel path{fill:var(--clay)}
+.pin.sel svg{transform:scale(1.25);transform-origin:50% 100%}
+.moi{background:none;border:0}
+.moi span{display:block;width:20px;height:20px;border-radius:50%;background:var(--clay);border:3px solid #fff;box-shadow:0 0 0 2px var(--clay),0 2px 6px rgba(0,0,0,.35)}
+
+.compte-rendu{margin:0 0 12px;font-weight:800;font-stretch:66%;font-size:32px;line-height:1.05;color:var(--pine)}
+.card{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:10px;cursor:pointer;transition:box-shadow .2s,background .2s}
+.card:hover{border-color:var(--pine-m)}
+.card.sel{box-shadow:0 0 0 2px var(--pine);background:var(--pine-l)}
+.card .info{flex:1;min-width:0}
+.nm{font-weight:800;font-stretch:78%;font-size:26px;line-height:1.05;margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:13px;font-weight:500;background:var(--pine-l);color:var(--pine);border-radius:999px;padding:2px 11px}
+.card.sel .chip{background:#fff}
+.addr{margin:8px 0 0;font-size:15.5px}
+.dist{flex:none;text-align:right;font-weight:800;font-stretch:75%;font-size:28px;line-height:1;color:var(--pine);font-variant-numeric:tabular-nums}
+.dist small{display:block;font-weight:500;font-stretch:100%;font-size:13px;color:var(--muted);margin-top:4px}
+a.it{background:var(--pine);color:#fff;text-decoration:none;font-weight:700;border-radius:999px;padding:7px 16px;min-height:36px;display:inline-flex;align-items:center;gap:6px;margin-top:12px;font-size:15px}
+a.it:hover{background:var(--pine-d)}
+.empty{color:var(--muted);padding:12px 4px;font-size:17px;max-width:42ch}
+.empty b{color:var(--ink)}
+.lnk{background:none;border:0;color:var(--pine);font:700 16px Archivo,sans-serif;text-decoration:underline;text-underline-offset:4px;padding:6px 0}
+.note{color:var(--muted);font-size:14.5px;margin:14px 4px 0}
+
+@media(max-width:600px){
+  .in,.wrap{padding-left:16px;padding-right:16px}
+  .bar{flex-wrap:nowrap;overflow-x:auto;margin-left:-16px;margin-right:-16px;padding:0 16px 4px}
+  .tab{flex:none}
+  .dist{font-size:22px}
+}
+@media(prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}.pin svg,.card,.go{transition:none}}
+</style>
+</head>
+<body>
+<header class="bandeau"><div class="in">
+  <h1><a href="/" title="Page d’accueil"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>Travelpoint</a></h1>
+  <div class="compte" id="compte"><a href="/app"><i class="bi bi-list-ul" aria-hidden="true"></i>Ma liste</a></div>
+</div></header>
+<section class="ajout"><div class="in">
+  <p class="tag">Autour de moi</p>
+  <p class="sous">Tes restaurants enregistrés, du plus proche au plus loin.</p>
+</div></section>
+<div class="wrap">
+  <div class="etat" id="etat" role="status"><span class="spin" aria-hidden="true"></span><span class="msg">Recherche de ta position…</span></div>
+  <div class="bar" id="rayons" role="group" aria-label="Distance maximale"></div>
+  <div class="layout"><div id="list"></div><div id="map"></div></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api=(p,o)=>fetch('/api'+p,o).then(r=>{if(r.status===401){location.href='/connexion?suite=/autour';return new Promise(()=>{})}  // session expiree
+  return r.ok?r.json():Promise.reject('Erreur '+r.status)});
+const hasPos=p=>p.lat!=null&&p.lat!==''&&p.lon!=null&&p.lon!==''&&isFinite(p.lat)&&isFinite(p.lon);
+const RAYONS=[[1000,'1 km'],[5000,'5 km'],[20000,'20 km'],[0,'Tout']];
+const LOCALISER='<button type="button" class="go" data-loc="1"><i class="bi bi-crosshair" aria-hidden="true"></i>Me localiser</button>';
+let places=[],moi=null,source='',rayon=5000,cadrer=true,charge=false,watchId=null,map,layer,markers={},sel=null;
+
+// distance a vol d'oiseau (formule de haversine), en metres
+function dist(a,b,c,d){const r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;return 2*6371e3*Math.asin(Math.sqrt(h))}
+const fmt=m=>m<50?'< 50 m':m<1000?`${Math.round(m/10)*10} m`:`${(m/1000).toLocaleString('fr-FR',{maximumFractionDigits:m<10000?1:0})} km`;
+const aPied=m=>m<=3000?` · ${Math.max(1,Math.round(m/80))} min à pied`:'';  // ~4,8 km/h
+
+function etat(html,cls=''){const e=$('#etat');e.className='etat '+cls;e.innerHTML=html}
+
+// ---- carte
+const PIN_SVG='<svg width="30" height="40" viewBox="0 0 30 40" aria-hidden="true"><path d="M15 39C6 28 2 21 2 14.5a13 13 0 0 1 26 0C28 21 24 28 15 39z" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14.5" r="5" fill="#fff"/></svg>';
+let PIN,MOI;
+function initMap(){
+  if(!window.L)return;
+  PIN=L.divIcon({className:'pin',html:PIN_SVG,iconSize:[30,40],iconAnchor:[15,39],popupAnchor:[0,-34]});
+  MOI=L.divIcon({className:'moi',html:'<span></span>',iconSize:[20,20],iconAnchor:[10,10]});
+  map=L.map('map').setView([46.6,2.4],5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  layer=L.layerGroup().addTo(map);
+  map.on('click',e=>{  // choisir un point a la main (position refusee, ou pour preparer un quartier a l'avance)
+    if(watchId!=null){navigator.geolocation.clearWatch(watchId);watchId=null}
+    poser(e.latlng.lat,e.latlng.lng,0,'carte');
+  });
+}
+
+// ---- position
+function localiser(){
+  source='';cadrer=true;
+  if(!window.isSecureContext){etat(`<span class="msg">La localisation demande une connexion sécurisée (https). Sur ton Mac, ouvre <b>http://localhost:8420/autour</b>, ou clique sur la carte pour choisir un point.</span>`,'ko');return}
+  if(!navigator.geolocation){etat('<span class="msg">Ton navigateur ne donne pas ta position. Clique sur la carte pour choisir un point.</span>','ko');return}
+  if(!moi)etat('<span class="spin" aria-hidden="true"></span><span class="msg">Recherche de ta position…</span>');
+  if(watchId!=null)navigator.geolocation.clearWatch(watchId);
+  watchId=navigator.geolocation.watchPosition(  // suit tes deplacements : les distances se mettent a jour en marchant
+    p=>{if(source!=='carte')poser(p.coords.latitude,p.coords.longitude,p.coords.accuracy,'gps')},
+    e=>{if(source==='gps')return;  // une perte de signal passagere : on garde la derniere position
+      etat(`<span class="msg">${e.code===1?'Tu as refusé la localisation. Autorise-la dans les réglages du navigateur, ou clique sur la carte pour choisir un point.':'Position introuvable pour l’instant. Réessaie, ou clique sur la carte pour choisir un point.'}</span>${LOCALISER}`,'ko')},
+    {enableHighAccuracy:true,maximumAge:30000,timeout:20000});
+}
+function poser(lat,lon,acc,src){
+  const premier=!moi||source!==src;
+  if(!premier&&src==='gps'&&dist(moi.lat,moi.lon,lat,lon)<15&&Math.abs(acc-moi.acc)<20)return;  // GPS qui tremble sur place : rien ne bouge (ni liste, ni popup ouverte)
+  moi={lat,lon,acc};source=src;
+  if(premier)cadrer=true;
+  etat(src==='carte'
+    ?`<i class="bi bi-pin-map" aria-hidden="true"></i><span class="msg">Point choisi sur la carte. Clique ailleurs pour le déplacer.</span>${LOCALISER}`
+    :`<i class="bi bi-geo-alt-fill" aria-hidden="true" style="color:var(--clay)"></i><span class="msg">Position trouvée${acc>150?` (à ${fmt(acc)} près)`:''}.</span>`);
+  render();
+}
+
+// ---- affichage
+function render(){
+  $('#rayons').innerHTML='<span class="lbl">À moins de</span>'+RAYONS.map(([r,t])=>`<button type="button" class="tab ${rayon===r?'on':''}" data-r="${r}" aria-pressed="${rayon===r}">${t}</button>`).join('');
+  if(!charge)return;
+  const geo=places.filter(hasPos),sans=places.length-geo.length;
+  const note=sans?`<p class="note">${sans} restaurant${sans>1?'s':''} sans position ${sans>1?'n’apparaissent':'n’apparaît'} pas ici. Tu peux placer leur point depuis <a href="/app">ta liste</a> (bouton Modifier).</p>`:'';
+  if(map){layer.clearLayers();markers={}}  // sans la carte (CDN injoignable), la liste fonctionne quand meme
+  if(!places.length){$('#list').innerHTML='<div class="empty">Aucun restaurant enregistré pour l’instant. <a href="/app">Colle un lien de vidéo</a> pour en ajouter.</div>';return}
+  if(!moi){  // en attendant la position : tous les restaurants, sans distance
+    if(map){geo.forEach(pin);if(cadrer&&geo.length)map.fitBounds(geo.map(p=>[+p.lat,+p.lon]),{padding:[40,40],maxZoom:15,animate:false})}
+    $('#list').innerHTML='<div class="empty">Dès que ta position est connue, tes restaurants s’affichent du plus proche au plus loin.</div>'+note;
+    return;
+  }
+  const tous=geo.map(p=>({...p,d:dist(moi.lat,moi.lon,+p.lat,+p.lon)})).sort((a,b)=>a.d-b.d);
+  const proches=rayon?tous.filter(p=>p.d<=rayon):tous;
+  if(map){  // toi + precision + cercle du rayon + restaurants dans le rayon
+    L.marker([moi.lat,moi.lon],{icon:MOI,keyboard:false,zIndexOffset:2000}).addTo(layer).bindTooltip(source==='carte'?'Point choisi':'Toi');
+    if(moi.acc>30&&source==='gps')L.circle([moi.lat,moi.lon],{radius:moi.acc,color:'#b5532f',weight:1,fillOpacity:.08,interactive:false}).addTo(layer);
+    const cercle=rayon?L.circle([moi.lat,moi.lon],{radius:rayon,color:'#1f4a3a',weight:1.5,dashArray:'6 6',fill:false,interactive:false}).addTo(layer):null;
+    proches.forEach(pin);
+    if(cadrer){
+      if(cercle)map.fitBounds(cercle.getBounds(),{padding:[20,20],animate:false});
+      else map.fitBounds([[moi.lat,moi.lon],...proches.map(p=>[+p.lat,+p.lon])],{padding:[40,40],maxZoom:16,animate:false});
+      cadrer=false;
+    }
+  }
+  if(!proches.length){
+    const p=tous[0];
+    $('#list').innerHTML=`<div class="empty">Aucun restaurant à moins de ${fmt(rayon)}.${p?` Le plus proche : <b>${esc(p.nom||'Restaurant')}</b>${p.ville?` (${esc(p.ville)})`:''}, à ${fmt(p.d)}.`:''}</div>`+
+      (p?'<button type="button" class="lnk" data-r="0">Tout afficher</button>':'')+note;
+    return;
+  }
+  $('#list').innerHTML=`<p class="compte-rendu">${proches.length} restaurant${proches.length>1?'s':''}${rayon?` à moins de ${fmt(rayon)}`:''}</p>`+proches.map(card).join('')+note;
+  paintSel();
+}
+function pin(p){
+  const m=L.marker([+p.lat,+p.lon],{icon:PIN,title:p.nom||'Restaurant'}).addTo(layer)
+    .bindPopup(`<b>${esc(p.nom||'Restaurant')}</b><br>${esc(p.adresse||'')}${p.d!=null?`<br>${fmt(p.d)}`:''}`);
+  m.on('click',()=>{sel=p.id;paintSel();$('#c-'+p.id)?.scrollIntoView({behavior:'smooth',block:'center'})});
+  markers[p.id]=m;
+}
+function card(p){
+  const dest=`${p.lat},${p.lon}`,mode=p.d<=3000?'&travelmode=walking':'';
+  const chips=[p.ville&&`<span class="chip">${esc(p.ville)}</span>`,p.done&&'<span class="chip">testé</span>',p.partage_par&&`<span class="chip">de ${esc(p.partage_par)}</span>`].filter(Boolean).join('');
+  return `<div class="card" id="c-${p.id}" data-id="${p.id}">
+    <div class="info"><h3 class="nm">${esc(p.nom||'Restaurant')}</h3>${chips?`<div class="chips">${chips}</div>`:''}
+      ${p.adresse?`<p class="addr">${esc(p.adresse)}</p>`:''}
+      <a class="it" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${dest}${mode}"><i class="bi bi-signpost-split" aria-hidden="true"></i>Itinéraire</a></div>
+    <div class="dist">${fmt(p.d)}<small>${aPied(p.d).slice(3)}</small></div>
+  </div>`;
+}
+function paintSel(){
+  document.querySelectorAll('.card.sel').forEach(c=>c.classList.remove('sel'));
+  Object.entries(markers).forEach(([id,m])=>{m.getElement()?.classList.toggle('sel',id===sel);m.setZIndexOffset(id===sel?1000:0)});
+  $('#c-'+sel)?.classList.add('sel');
+}
+
+// ---- evenements
+document.addEventListener('click',e=>{
+  const r=e.target.closest('[data-r]');
+  if(r){rayon=+r.dataset.r;cadrer=true;render();return}
+  if(e.target.closest('[data-loc]')){localiser();return}
+  const c=e.target.closest('.card');
+  if(c&&!e.target.closest('a')){sel=c.dataset.id;paintSel();const m=markers[sel];if(m){map.panTo(m.getLatLng());m.openPopup()}}
+});
+
+api('/moi').then(m=>{
+  $('#compte').innerHTML=`<a href="/app"><i class="bi bi-list-ul" aria-hidden="true"></i>Ma liste</a><span>${esc(m.pseudo)}</span>${m.role==='admin'?'<a href="/admin">Comptes</a>':''}<button type="button" id="deco">Se déconnecter</button>`;
+  $('#deco').onclick=async()=>{await fetch('/api/deconnexion',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});location.href='/'};
+});
+initMap();render();
+api('/places').then(p=>{places=p;charge=true;render()}).catch(e=>etat(`<span class="msg">Impossible de charger tes restaurants (${esc(e)}).</span>`,'ko'));
+localiser();
+</script>
+</body>
+</html>

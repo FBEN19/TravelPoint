@@ -70,7 +70,7 @@ def amorcer(key, wd, sources):
     if not src or (wd / "video.info.json").exists():
         return
     wd.mkdir(parents=True, exist_ok=True)
-    for n in ("video.info.json", "a.txt", "a.modele", "video.mp4"):
+    for n in ["video.info.json", "a.txt", "a.modele", "video.mp4"] + [f.name for f in src.glob("a.*.txt")]:
         if (src / n).exists():
             shutil.copy2(src / n, wd / n)
 

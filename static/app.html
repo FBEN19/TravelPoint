@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Travelpoint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" crossorigin="anonymous">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+:root{--pine:#1f4a3a;--pine-d:#153429;--pine-m:#4f7565;--pine-l:#e3ece6;--paper:#f6f2e8;--card:#fcfaf4;--line:#ddd5c2;--ink:#1d2a24;--muted:#545e58;--clay:#b5532f;--clay-t:#7a3519;--clay-l:#f3e2d8;--err:#9e2a1f;--pts:#b9ae95}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.5 Archivo,'Helvetica Neue',Arial,sans-serif}
+:focus-visible{outline:3px solid var(--pine);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+a{color:var(--pine);text-underline-offset:4px}
+button{font:700 15px Archivo,sans-serif;cursor:pointer}
+
+/* bandeau */
+.bandeau{background:var(--pine);color:var(--paper)}
+.in{max-width:1240px;margin:0 auto;padding:0 24px}
+.bandeau .in{display:flex;align-items:center;gap:8px 20px;flex-wrap:wrap;padding-top:12px;padding-bottom:12px}
+.bandeau h1{margin:0;font-weight:800;font-stretch:80%;font-size:26px;line-height:1;letter-spacing:-.01em}
+.bandeau h1 a{color:var(--paper);text-decoration:none;display:inline-flex;align-items:center;gap:10px}
+.compte{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;font-size:15px}
+.compte a,.compte button{color:var(--paper);font:inherit;font-weight:700;background:none;border:0;padding:8px 0;cursor:pointer;text-decoration:underline;text-underline-offset:4px}
+.bandeau :focus-visible{outline-color:var(--paper)}
+
+/* ajout d'un lien */
+.ajout{background:var(--pine-l);border-bottom:1px solid #c9dccf}
+.ajout .in{padding-top:22px;padding-bottom:22px;display:flex;flex-direction:column;gap:12px}
+.tag{margin:0;font-weight:800;font-stretch:70%;font-size:clamp(28px,4vw,46px);line-height:1;letter-spacing:-.005em;color:var(--pine)}
+form#f{display:flex;gap:10px;margin:0}
+input[type=url]{flex:1;min-width:0;padding:13px 16px;min-height:54px;border:1.5px solid var(--line);border-radius:10px;background:#fff;font:inherit;font-size:17px;color:var(--ink)}
+input[type=url]:hover{border-color:var(--pine-m)}
+input[type=url]:focus-visible,.foot textarea:focus-visible,.fg input:focus-visible,.fg textarea:focus-visible,.partage input:focus-visible{outline:2px solid var(--pine);outline-offset:1px;border-color:var(--pine)}
+.go{background:var(--pine);color:#fff;border:0;border-radius:10px;padding:0 26px;font-size:16px;min-height:44px;transition:background .15s}
+form#f .go{min-height:54px}
+.go:hover{background:var(--pine-d)}
+.go:disabled{opacity:.6;cursor:wait}
+
+.wrap{max-width:1240px;margin:0 auto;padding:20px 24px 72px}
+#jobs:empty{display:none}
+#jobs{margin-bottom:6px}
+.job{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 14px;margin-bottom:8px;font-size:15px}
+.job .u{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:var(--muted)}
+.job.err{border-color:#d9b3a2;background:var(--clay-l)}
+.job .msg{color:var(--clay-t);font-weight:700}
+.spin{width:16px;height:16px;border:2.5px solid var(--pine-l);border-top-color:var(--pine);border-radius:50%;animation:s .9s linear infinite;flex:none}
+@keyframes s{to{transform:rotate(360deg)}}
+.lnk{background:none;border:0;color:var(--pine);font:500 15px Archivo,sans-serif;text-decoration:underline;text-underline-offset:4px;padding:6px 0}
+
+/* onglets */
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 18px}
+.tab{background:none;border:1.5px solid var(--line);border-radius:999px;padding:0 16px;min-height:44px;color:var(--ink);font:500 15px Archivo,sans-serif;display:inline-flex;align-items:center;gap:8px}
+.tab:hover{border-color:var(--pine-m)}
+.tab .n{pointer-events:none;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
+.tab.on{background:var(--pine);border-color:var(--pine);color:#fff}
+.tab.on .n{color:var(--pine-l)}
+.tab.add{margin-left:auto;color:var(--pine);border-color:var(--pine);font-weight:700}
+.tab.add:hover{background:var(--pine-l)}
+
+/* liste + carte */
+.layout{display:grid;grid-template-columns:1fr;gap:20px}
+#map{order:-1;height:250px;border-radius:12px;border:1px solid var(--line);background:var(--pine-l);z-index:0}
+@media(min-width:920px){
+  .layout{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr)}
+  #map{order:0;position:sticky;top:16px;height:calc(100vh - 32px)!important}
+}
+.leaflet-tile-pane{filter:saturate(.7) sepia(.14)}
+.leaflet-popup-content-wrapper{border-radius:10px;font-family:Archivo,sans-serif}
+.pin{background:none;border:0}
+.pin svg{display:block;filter:drop-shadow(0 3px 2px rgba(21,52,41,.4));transition:transform .15s}
+.pin path{fill:var(--pine)}
+.pin.sel path,.pin.edit path{fill:var(--clay)}
+.pin.sel svg{transform:scale(1.25);transform-origin:50% 100%}
+
+.city{display:flex;align-items:baseline;gap:12px;margin:28px 0 12px;font-weight:800;font-stretch:66%;font-size:36px;line-height:1;letter-spacing:-.005em;color:var(--pine)}
+.city:first-child{margin-top:0}
+.city:after{content:"";flex:1;order:2;border-bottom:2px dotted var(--pts);transform:translateY(-5px)}
+.city .nb{order:3;font-stretch:80%;font-size:22px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:box-shadow .2s,background .2s}
+.card.geo{cursor:pointer}
+.card.geo:hover{border-color:var(--pine-m)}
+.card.dim{border-style:dashed;background:transparent}
+.card.fait .nm{text-decoration:line-through;text-decoration-color:var(--pts);color:var(--muted)}
+.card.sel{box-shadow:0 0 0 2px var(--pine);background:var(--pine-l)}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.nm{font-weight:800;font-stretch:78%;font-size:28px;line-height:1.05;margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:13px;font-weight:500;background:var(--pine-l);color:var(--pine);border-radius:999px;padding:2px 11px}
+.card.sel .chip{background:#fff}
+.chip.warn{background:var(--clay-l);color:var(--clay-t);font-weight:700}
+.addr{margin:12px 0 2px;font-size:16px}
+.mono{font-size:14.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.prix{margin:10px 0 0;padding:0;list-style:none;font-size:15px}
+.prix li{padding:4px 0;border-bottom:2px dotted #d6ccb4}
+.links{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;margin:12px 0 0;font-size:15px}
+.links a:not(.it){font-weight:500}
+a.it{background:var(--pine);color:#fff;text-decoration:none;font-weight:700;border-radius:999px;padding:7px 16px;min-height:36px;display:inline-flex;align-items:center}
+a.it:hover{background:var(--pine-d)}
+.foot{display:flex;gap:12px;align-items:flex-start;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.foot label{font-size:15px;font-weight:500;white-space:nowrap;display:flex;gap:8px;align-items:center;min-height:38px}
+.foot input[type=checkbox]{width:20px;height:20px;accent-color:var(--pine)}
+textarea{flex:1;resize:vertical;min-height:40px;border:1.5px solid var(--line);border-radius:8px;background:#fff;padding:8px 11px;font:inherit;font-size:15px;color:var(--ink)}
+.x{background:none;border:0;color:var(--muted);font-size:22px;line-height:1;padding:6px 8px;margin:-6px -8px 0 0;border-radius:6px}
+.x:hover{color:var(--clay-t);background:var(--clay-l)}
+.edit{border-color:var(--pine);border-width:2px}
+.fg{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-top:12px}
+.fg label{display:flex;flex-direction:column;gap:4px;font-size:13.5px;font-weight:500;color:var(--muted)}
+.fg .w{grid-column:1/-1}
+.fg input,.fg textarea{border:1.5px solid var(--line);border-radius:8px;background:#fff;padding:8px 10px;font:inherit;font-size:15.5px;color:var(--ink);min-width:0;min-height:42px}
+.act{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-top:14px}
+.act .go{padding:0 20px}
+.bi{line-height:1;vertical-align:-.125em}
+button .bi,a .bi{pointer-events:none}
+.links .bi,.lnk .bi,a.it .bi,.tab.add .bi,.compte .bi{margin-right:6px}
+.x .bi{font-size:17px}
+.empty{color:var(--muted);padding:24px 4px;font-size:17px;max-width:36ch}
+
+/* partage */
+dialog.partage{border:1px solid var(--line);border-radius:16px;padding:0;width:min(440px,calc(100vw - 32px));background:var(--card);color:var(--ink);box-shadow:0 30px 60px -20px rgba(21,52,41,.5)}
+dialog.partage::backdrop{background:rgba(29,42,36,.5)}
+.partage .tete{display:flex;align-items:flex-start;gap:12px;padding:20px 20px 0}
+.partage h2{flex:1;margin:0;font-weight:800;font-stretch:76%;font-size:28px;line-height:1.05}
+.partage .fermer{flex:none;width:44px;height:44px;border-radius:999px;border:1px solid var(--line);background:none;color:var(--muted);font-size:22px;cursor:pointer}
+.partage .fermer:hover{background:var(--pine-l)}
+.partage .corps{padding:14px 20px 22px;display:flex;flex-direction:column;gap:10px}
+.partage .aide{margin:0;font-size:15px;color:var(--muted)}
+.partage label{font-size:15px;font-weight:700}
+.partage input{width:100%;font:inherit;padding:11px 14px;border:1.5px solid var(--line);border-radius:10px;background:#fff;min-height:46px}
+.partage ul{list-style:none;margin:0;padding:0;max-height:min(300px,45vh);overflow-y:auto;border:1px solid var(--line);border-radius:12px;background:#fff}
+.partage li+li{border-top:1px solid var(--line)}
+.partage li button{width:100%;display:flex;align-items:center;gap:12px;text-align:left;font:inherit;padding:10px 14px;min-height:50px;background:none;border:0;cursor:pointer;color:var(--ink)}
+.partage li button:hover,.partage li button:focus-visible{background:var(--pine-l);outline:none}
+.partage .avatar{flex:none;width:32px;height:32px;border-radius:999px;background:var(--pine);color:#fff;display:grid;place-items:center;font-weight:700;font-size:15px}
+.partage mark{background:none;color:var(--pine);font-weight:800}
+.partage .vide{padding:16px 14px;color:var(--muted);font-size:15px}
+.partage .etat{min-height:22px;margin:0;font-size:15px}
+.partage .etat.ok{color:var(--pine);font-weight:700}.partage .etat.ko{color:var(--err);font-weight:700}
+
+@media(max-width:600px){
+  .in,.wrap{padding-left:16px;padding-right:16px}
+  form#f{flex-direction:column}
+  form#f .go{width:100%}
+  .bar{flex-wrap:nowrap;overflow-x:auto;margin-left:-16px;margin-right:-16px;padding:0 16px 4px}
+  .tab{flex:none}
+  .tab.add{margin-left:0}
+  .fg{grid-template-columns:1fr}
+  .foot{flex-direction:column;gap:4px}
+  .foot label{white-space:normal}
+  .foot textarea{width:100%}
+}
+@media(prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}.pin svg,.card,.go{transition:none}}
+</style>
+</head>
+<body>
+<header class="bandeau"><div class="in">
+  <h1><a href="/" title="Page d’accueil"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>Travelpoint</a></h1>
+  <div class="compte" id="compte"></div>
+</div></header>
+<section class="ajout"><div class="in">
+  <p class="tag">Les restaurants vus en vidéo, rangés pour y aller.</p>
+  <form id="f"><label class="sr" for="u">Lien de la vidéo</label><input id="u" type="url" placeholder="Colle un lien TikTok, Instagram ou YouTube…" required><button class="go">Analyser</button></form>
+</div></section>
+<div class="wrap">
+  <div id="jobs" aria-live="polite"></div>
+  <div class="bar" id="tabs"></div>
+  <div class="layout"><div id="list"></div><div id="map"></div></div>
+</div>
+<dialog class="partage" id="partage" aria-labelledby="partage-titre">
+  <div class="tete"><h2 id="partage-titre">Partager</h2><button type="button" class="fermer" id="partage-fermer" aria-label="Fermer"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+  <div class="corps">
+    <p class="aide">La personne reçoit une copie de la fiche dans sa liste, sans ta note perso.</p>
+    <label for="partage-q">Rechercher un compte</label>
+    <input id="partage-q" type="search" autocomplete="off" placeholder="Pseudo…" aria-controls="partage-liste">
+    <ul id="partage-liste" aria-live="polite"></ul>
+    <p class="etat" id="partage-etat" role="status"></p>
+  </div>
+</dialog>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeUrl=u=>{u=String(u||'');if(/^https?:\/\//i.test(u))return u;if(/^www\./i.test(u))return'https://'+u;return''};
+const DAYS={Mo:'lun',Tu:'mar',We:'mer',Th:'jeu',Fr:'ven',Sa:'sam',Su:'dim',PH:'férié'};
+const frHours=h=>String(h||'').replace(/\b(Mo|Tu|We|Th|Fr|Sa|Su|PH)\b/g,d=>DAYS[d]);
+const errMsg=d=>Array.isArray(d)?d.map(x=>`${(x.loc||[]).slice(1).join('.')} : ${x.msg}`).join('\n'):d||'Erreur';
+const api=(p,o)=>fetch('/api'+p,o).then(r=>{if(r.status===401){location.href='/connexion?suite=/app';return new Promise(()=>{})}  // session expiree
+  return r.ok?r.json():r.json().then(e=>Promise.reject(errMsg(e.detail)))});
+const send=(p,method,body)=>api(p,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+let places=[],jobs=[],filter='todo',map,layer,markers={},sel=null,lastKey='',editing=null,draft=null,em=null;
+
+const PIN_SVG='<svg width="30" height="40" viewBox="0 0 30 40" aria-hidden="true"><path d="M15 39C6 28 2 21 2 14.5a13 13 0 0 1 26 0C28 21 24 28 15 39z" stroke="#fff" stroke-width="2"/><circle cx="15" cy="14.5" r="5" fill="#fff"/></svg>';
+let PIN,PIN_EDIT;
+function initMap(){
+  if(!window.L)return;
+  const mk=c=>L.divIcon({className:c,html:PIN_SVG,iconSize:[30,40],iconAnchor:[15,39],popupAnchor:[0,-34]});
+  PIN=mk('pin');PIN_EDIT=mk('pin edit');
+  map=L.map('map').setView([46.6,2.4],5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  layer=L.layerGroup().addTo(map);
+  map.on('click',e=>{if(editing)setPos(e.latlng.lat,e.latlng.lng)});  // mode edition : un clic place le point
+}
+const shown=()=>places.filter(p=>filter==='all'||(filter==='done')===p.done||p.id===editing);
+const hasPos=p=>p.lat!=null&&p.lat!==''&&p.lon!=null&&p.lon!==''&&isFinite(p.lat)&&isFinite(p.lon);
+function render(){
+  const ae=document.activeElement,af=ae?.dataset?.f,caret=ae?.selectionStart;  // un rechargement ne doit pas faire perdre le champ en cours de saisie
+  const n={todo:places.filter(p=>!p.done).length,done:places.filter(p=>p.done).length,all:places.length};
+  $('#tabs').innerHTML=[['todo','À tester'],['done','Testés'],['all','Tous']].map(([k,t])=>`<button class="tab ${filter===k?'on':''}" data-k="${k}">${t} <span class="n">${n[k]}</span></button>`).join('')+
+    '<button class="tab add" data-add="1"><i class="bi bi-plus-lg" aria-hidden="true"></i>Ajouter un restaurant</button>';
+  const list=shown(),byCity={};
+  list.forEach(p=>(byCity[p.ville||'Ville inconnue']??=[]).push(p));
+  $('#list').innerHTML=(editing==='new'?form('new'):'')+(list.length?Object.entries(byCity).map(([c,ps])=>`<div class="city">${esc(c)}<span class="nb">${ps.length}</span></div>`+ps.map(p=>p.id===editing?form(p.id):card(p)).join('')).join(''):
+    editing==='new'?'':`<div class="empty">${places.length?'Rien dans cette liste.':'Aucun restaurant pour l’instant. Colle un lien ci-dessus.'}</div>`);
+  if(af){const i=$(`[data-f=${af}]`);i?.focus();try{i.setSelectionRange(caret,caret)}catch{}}
+  if(!map)return;
+  layer.clearLayers();markers={};
+  const pts=list.filter(hasPos);
+  pts.forEach(p=>{
+    if(p.id===editing)return;  // en edition, le point est le marqueur deplacable
+    const m=L.marker([+p.lat,+p.lon],{icon:PIN}).addTo(layer).bindPopup(`<b>${esc(p.nom)}</b><br>${esc(p.adresse||'')}`);
+    m.on('click',()=>{select(p.id);$('#c-'+p.id)?.scrollIntoView({behavior:'smooth',block:'center'})});markers[p.id]=m;
+  });
+  const key=filter+'|'+places.filter(hasPos).map(p=>`${p.id}@${p.lat},${p.lon}`).sort().join('|');  // onglet ou lieux localises changes (cocher une case ne recadre pas)
+  if(key!==lastKey&&!markers[sel]&&pts.length)map.fitBounds(pts.map(p=>[+p.lat,+p.lon]),{padding:[40,40],maxZoom:15,animate:false});  // jamais avec un restaurant selectionne visible
+  lastKey=key;
+  paintSel(true);syncEm();
+}
+// ---- selection : sel survit aux re-rendus (filtre, note, case a cocher)
+function paintSel(reopen){
+  document.querySelectorAll('.card.sel').forEach(c=>c.classList.remove('sel'));
+  Object.entries(markers).forEach(([id,m])=>{m.getElement()?.classList.toggle('sel',id===sel);m.setZIndexOffset(id===sel?1000:0)});
+  $('#c-'+sel)?.classList.add('sel');
+  if(reopen&&markers[sel]){const pp=markers[sel].getPopup();pp.options.autoPan=false;markers[sel].openPopup();pp.options.autoPan=true}  // sans bouger la carte
+}
+function select(id,pan){
+  sel=id;paintSel();
+  if(pan&&markers[id]){map.setView(markers[id].getLatLng(),Math.max(map.getZoom(),15),{animate:false});markers[id].openPopup()}
+}
+function shortAddr(p){  // "Nom, 17, Rue X, Quartier, Ville, Region, 75002, Pays" -> "17 Rue X, 75002 Ville"
+  let parts=String(p.adresse).split(',').map(x=>x.trim());
+  if(parts.length<4)return p.adresse;
+  if(parts[0].toLowerCase()===String(p.nom||'').toLowerCase()||parts[0]===p.nom_local)parts.shift();
+  const pc=parts.find(x=>/^\d{3,5}(-\d{3,4})?$/.test(x));
+  if(!pc)return parts.slice(0,4).join(', ');
+  const street=/^\d+\w*$/.test(parts[0])?parts[0]+' '+parts[1]:parts[0];
+  return `${street}, ${pc} ${p.ville||''}`.trim();
+}
+function card(p){
+  const cuisine=(p.cuisine||'').split(';').filter(Boolean).map(c=>`<span class="chip">${esc(c.replace(/_/g,' '))}</span>`).join('');
+  const de=p.partage_par?`<span class="chip" title="Fiche partagée par ${esc(p.partage_par)}">de ${esc(p.partage_par)}</span>`:'';
+  const warn=de+(p.confiance==='a_verifier'?'<span class="chip warn">à vérifier</span>':p.confiance==='moyenne'?'<span class="chip warn">probable</span>':p.modifie_manuellement?'<span class="chip">modifié</span>':'');
+  const site=safeUrl(p.site),src=safeUrl(p.url);
+  const dest=p.lat?`${p.lat},${p.lon}`:encodeURIComponent((p.nom||'')+' '+(p.adresse||''));
+  const prix=(p.prix||[]).length?`<ul class="prix">${p.prix.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'';
+  return `<div class="card ${hasPos(p)?'geo':''} ${p.done?'fait':''} ${p.confiance==='a_verifier'?'dim':''}" id="c-${p.id}">
+    <div class="top"><div><h3 class="nm">${esc(p.nom||'Restaurant')}</h3>${p.nom_local?`<div class="mono">${esc(p.nom_local)}</div>`:''}<div class="chips">${warn}${cuisine}</div></div>
+    <button class="x" data-del="${p.id}" title="Supprimer" aria-label="Supprimer"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+    ${p.adresse?`<div class="addr">${esc(shortAddr(p))}</div>`:''}
+    ${p.horaires?`<div class="mono">${esc(frHours(p.horaires))}</div>`:''}
+    ${prix}
+    <div class="links"><a class="it" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${dest}"><i class="bi bi-signpost-split" aria-hidden="true"></i>Itinéraire</a>
+    ${site?`<a target="_blank" rel="noopener" href="${esc(site)}"><i class="bi bi-globe2" aria-hidden="true"></i>Site</a>`:''}
+    ${p.tel?`<a href="tel:${esc(p.tel.replace(/[^+\d]/g,''))}"><i class="bi bi-telephone" aria-hidden="true"></i>${esc(p.tel)}</a>`:''}
+    ${src?`<a target="_blank" rel="noopener" href="${esc(src)}"><i class="bi bi-play-circle" aria-hidden="true"></i>Vidéo</a>`:''}
+    ${safeUrl(p.source_web)?`<a target="_blank" rel="noopener" href="${esc(safeUrl(p.source_web))}" title="Page où l’adresse a été trouvée"><i class="bi bi-link-45deg" aria-hidden="true"></i>Source</a>`:''}
+    <button class="lnk" data-edit="${p.id}"><i class="bi bi-pencil" aria-hidden="true"></i>Modifier</button><button class="lnk" data-partage="${p.id}" data-nom="${esc(p.nom||'ce restaurant')}"><i class="bi bi-share" aria-hidden="true"></i>Partager</button>${src?`<button class="lnk" data-re="${esc(p.url)}" title="Relancer l’analyse de la vidéo avec la dernière version de l’app"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Réanalyser</button>`:''}${['a_verifier','moyenne'].includes(p.confiance)?`<button class="lnk" data-ok="${p.id}"><i class="bi bi-check2" aria-hidden="true"></i>C’est bon</button>`:''}</div>
+    <div class="foot"><label><input type="checkbox" data-done="${p.id}" ${p.done?'checked':''}> J’y suis allé</label>
+    <textarea data-note="${p.id}" rows="1" maxlength="2000" placeholder="Note perso…">${esc(p.note)}</textarea></div></div>`;
+}
+// ---- modification manuelle
+const FIELDS=[['nom','Nom'],['adresse','Adresse','w'],['ville','Ville'],['pays','Pays'],['cuisine','Cuisine'],['tel','Téléphone'],['site','Site (https://…)','w'],['horaires','Horaires','w'],['lat','Latitude'],['lon','Longitude']];
+function form(id){
+  const f=([k,t,w])=>`<label class="${w||''}">${t}<input data-f="${k}" value="${esc(draft[k])}" ${k==='lat'||k==='lon'?'inputmode="decimal"':''}></label>`;
+  return `<div class="card edit" id="c-${id}"><h3 class="nm">${id==='new'?'Nouveau restaurant':'Modifier la fiche'}</h3>
+    <div class="fg">${FIELDS.map(f).join('')}<label class="w">Prix (un par ligne)<textarea data-f="prix" rows="3">${esc(draft.prix)}</textarea></label></div>
+    <div class="act"><button class="lnk" data-geo="1">Chercher cette adresse</button><span class="mono">ou clique sur la carte / déplace le marqueur</span></div>
+    <div class="act"><button class="go" data-save="1">Enregistrer</button><button class="lnk" data-cancel="1">Annuler</button></div></div>`;
+}
+function startEdit(id){
+  const p=id==='new'?{}:places.find(x=>x.id===id);if(!p)return;
+  editing=id;draft={prix:(p.prix||[]).join('\n')};
+  FIELDS.forEach(([k])=>draft[k]=String(p[k]??''));
+  render();
+  if(map&&hasPos(p))map.setView([+p.lat,+p.lon],Math.max(map.getZoom(),15),{animate:false});
+  $('#c-'+id)?.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function stopEdit(){editing=draft=null;render()}
+function syncEm(){  // marqueur deplacable = latitude/longitude du formulaire
+  const la=parseFloat(String(draft?.lat).replace(',','.')),lo=parseFloat(String(draft?.lon).replace(',','.'));
+  if(!map||!editing||!(Math.abs(la)<=90&&Math.abs(lo)<=180)){em?.remove();em=null;return}
+  if(em)em.setLatLng([la,lo]);
+  else{em=L.marker([la,lo],{draggable:true,zIndexOffset:2000,icon:PIN_EDIT}).addTo(map);em.on('dragend',()=>setPos(em.getLatLng().lat,em.getLatLng().lng))}
+}
+function setPos(la,lo){
+  draft.lat=la.toFixed(6);draft.lon=lo.toFixed(6);
+  ['lat','lon'].forEach(k=>{const i=$(`[data-f=${k}]`);if(i)i.value=draft[k]});
+  syncEm();
+}
+function payload(){
+  const num=(v,t)=>{v=String(v).trim().replace(',','.');if(!v)return null;if(!isFinite(v))throw t+' invalide';return +v};
+  return {...Object.fromEntries(FIELDS.filter(([k])=>k!=='lat'&&k!=='lon').map(([k])=>[k,draft[k].trim()])),
+    prix:draft.prix.split('\n').map(x=>x.trim()).filter(Boolean),lat:num(draft.lat,'Latitude'),lon:num(draft.lon,'Longitude')};
+}
+async function save(){
+  let id=editing;
+  try{
+    const body=payload();
+    if(id==='new')id=(await send('/places','POST',body)).id;else await send('/places/'+id,'PATCH',body);
+  }catch(err){return alert(err)}
+  editing=draft=null;sel=id;await load();select(id,true);
+}
+async function geocode(btn){
+  const a=draft.adresse.trim();if(!a)return alert('Saisis d’abord une adresse.');
+  const q=[a,draft.ville,draft.pays].filter(x=>x&&x.trim()&&!a.toLowerCase().includes(x.trim().toLowerCase())).reduce((s,x)=>s+', '+x.trim(),a);
+  btn.disabled=true;btn.textContent='Recherche…';
+  try{
+    const g=await send('/geocode','POST',{adresse:q});
+    setPos(g.lat,g.lon);map?.setView([g.lat,g.lon],Math.max(map.getZoom(),15),{animate:false});
+    ['ville','pays'].forEach(k=>{if(!draft[k].trim()&&g[k]){draft[k]=g[k];$(`[data-f=${k}]`).value=g[k]}});
+  }catch(err){alert(err)}
+  btn.disabled=false;btn.textContent='Chercher cette adresse';
+}
+function renderJobs(){
+  const act=jobs.filter(j=>j.status!=='done'||Date.now()/1000-j.created<20);
+  $('#jobs').innerHTML=act.map(j=>j.status==='error'
+    ?`<div class="job err"><div class="u">${esc(j.url)}</div><span class="msg">${esc(j.error)}</span><button class="lnk" data-retry="${esc(j.url)}">Réessayer</button><button class="lnk" data-close="${j.id}">Fermer</button></div>`
+    :j.status==='done'?`<div class="job"><div class="u">${esc(j.url)}</div><span><i class="bi bi-check-lg" aria-hidden="true"></i> ${esc(j.step)}</span></div>`
+    :`<div class="job"><span class="spin"></span><div class="u">${esc(j.url)}</div><span>${esc(j.step)}</span></div>`).join('');
+}
+async function load(){places=await api('/places');render()}
+let busy=false;
+async function poll(){
+  try{
+    const prev=jobs.filter(j=>j.status==='running'||j.status==='queued').length;
+    jobs=await api('/jobs');renderJobs();
+    const now=jobs.filter(j=>j.status==='running'||j.status==='queued').length;
+    if(prev&&now<prev)await load();
+  }catch(e){}
+}
+$('#f').onsubmit=async e=>{
+  e.preventDefault();const u=$('#u').value.trim();if(!u)return;
+  try{const r=await send('/analyze','POST',{url:u});
+    $('#u').value='';await poll();await load();
+    if(r.deja){
+      if(r.statut!=='done')return alert('Cette vidéo est déjà en cours d’analyse.');
+      if(r.lieux.length){filter='all';render();select(r.lieux[0],true);$('#c-'+r.lieux[0])?.scrollIntoView({behavior:'smooth',block:'center'})}
+      const msg=r.lieux.length?`Vidéo déjà analysée : ${r.lieux.length} restaurant(s) dans ta liste. Aucune IA relancée.`:'Vidéo déjà analysée : aucun restaurant trouvé (ou tu les as supprimés).';
+      if(confirm(msg+'\n\nOK = réanalyser quand même (tes fiches modifiées, testées ou annotées sont conservées)\nAnnuler = ne rien faire')){await send('/analyze','POST',{url:u,force:true});await poll()}
+    }
+  }catch(err){alert(err)}
+};
+document.addEventListener('click',async e=>{
+  const t=e.target,d=t.dataset;
+  if(d.k){filter=d.k;render()}
+  if(d.add)startEdit('new');
+  if(d.edit)startEdit(d.edit);
+  if(d.cancel)stopEdit();
+  if(d.save)await save();
+  if(d.geo)await geocode(t);
+  if(d.ok){await send('/places/'+d.ok,'PATCH',{verifie:true});await load()}
+  if(d.del&&confirm('Supprimer ce restaurant ?')){if(sel===d.del)sel=null;if(editing===d.del)editing=draft=null;await api('/places/'+d.del,{method:'DELETE'});await load()}
+  if(d.retry){await send('/analyze','POST',{url:d.retry});await poll()}
+  if(d.partage)ouvrirPartage(d.partage,d.nom);
+  if(d.re&&confirm('Réanalyser cette vidéo ?\n\nLes fiches de cette vidéo sont remplacées par le nouveau résultat, sauf celles que tu as modifiées, cochées ou annotées.')){
+    t.disabled=true;t.textContent='Analyse…';
+    try{await send('/analyze','POST',{url:d.re,force:true});await poll();await load()}catch(err){alert(err);t.disabled=false;t.innerHTML='<i class="bi bi-arrow-repeat" aria-hidden="true"></i>Réanalyser'}}
+  if(d.close){await api('/jobs/'+d.close,{method:'DELETE'});await poll()}
+  const c=t.closest('.card.geo');  // clic sur la fiche (hors liens, boutons, case, note) = selection
+  if(c&&!t.closest('a,button,input,textarea,label,.edit')&&markers[c.id.slice(2)])select(c.id.slice(2),true);
+});
+document.addEventListener('input',e=>{
+  const k=e.target.dataset.f;
+  if(k&&draft){draft[k]=e.target.value;if(k==='lat'||k==='lon')syncEm()}
+});
+document.addEventListener('change',async e=>{
+  const t=e.target;
+  if(t.dataset.done){await send('/places/'+t.dataset.done,'PATCH',{done:t.checked});await load()}
+  if(t.dataset.note)await send('/places/'+t.dataset.note,'PATCH',{note:t.value});
+});
+// ---- partage d'une fiche : fenetre avec la liste des comptes, filtree pendant la frappe
+const dlg=$('#partage');let partagePid=null,comptes=[],envoi=false;
+const surligne=(p,q)=>{const i=q?p.toLowerCase().indexOf(q.toLowerCase()):-1;return i<0?esc(p):esc(p.slice(0,i))+'<mark>'+esc(p.slice(i,i+q.length))+'</mark>'+esc(p.slice(i+q.length))};
+function listePartage(){
+  const q=$('#partage-q').value.trim().replace(/^@/,''),l=q.toLowerCase();
+  const res=comptes.filter(p=>p.toLowerCase().includes(l)).sort((a,b)=>(b.toLowerCase().startsWith(l))-(a.toLowerCase().startsWith(l)));
+  $('#partage-liste').innerHTML=res.length?res.map(p=>`<li><button type="button" data-dest="${esc(p)}"><span class="avatar" aria-hidden="true">${esc(p[0].toUpperCase())}</span><span>${surligne(p,q)}</span></button></li>`).join('')
+    :`<li class="vide">${comptes.length?'Aucun compte ne correspond à « '+esc(q)+' ».':'Personne d’autre n’a encore de compte.'}</li>`;
+}
+async function ouvrirPartage(pid,nom){
+  partagePid=pid;$('#partage-titre').textContent=`Partager « ${nom} »`;$('#partage-q').value='';
+  const etat=$('#partage-etat');etat.textContent='Chargement des comptes…';etat.className='etat';
+  $('#partage-liste').innerHTML='';dlg.showModal();$('#partage-q').focus();
+  try{comptes=await api('/utilisateurs');etat.textContent=''}catch(err){comptes=[];etat.textContent=err;etat.className='etat ko'}
+  listePartage();
+}
+$('#partage-q').oninput=listePartage;
+$('#partage-q').onkeydown=e=>{if(e.key==='ArrowDown'||e.key==='Enter'){const b=$('#partage-liste button');if(b){e.preventDefault();e.key==='Enter'?b.click():b.focus()}}};
+$('#partage-liste').onkeydown=e=>{
+  const bs=[...$('#partage-liste').querySelectorAll('button')],i=bs.indexOf(document.activeElement);
+  if(e.key==='ArrowDown'&&i<bs.length-1){e.preventDefault();bs[i+1].focus()}
+  if(e.key==='ArrowUp'){e.preventDefault();i>0?bs[i-1].focus():$('#partage-q').focus()}
+};
+$('#partage-liste').onclick=async e=>{
+  const b=e.target.closest('button[data-dest]');if(!b||envoi)return;
+  const etat=$('#partage-etat');envoi=true;etat.className='etat';etat.textContent=`Envoi à ${b.dataset.dest}…`;
+  try{const r=await send('/places/'+partagePid+'/partager','POST',{pseudo:b.dataset.dest});etat.className='etat ok';etat.innerHTML=`<i class="bi bi-check-lg" aria-hidden="true"></i> Fiche envoyée à ${esc(r.pseudo)}.`;setTimeout(()=>dlg.open&&dlg.close(),1400)}
+  catch(err){etat.className='etat ko';etat.textContent=err}
+  envoi=false;
+};
+$('#partage-fermer').onclick=()=>dlg.close();
+dlg.addEventListener('click',e=>{if(e.target===dlg)dlg.close()});  // clic a cote de la fenetre
+
+api('/moi').then(m=>{
+  $('#compte').innerHTML=`<a href="/autour"><i class="bi bi-geo-alt" aria-hidden="true"></i>Autour de moi</a><span>${esc(m.pseudo)}</span>${m.role==='admin'?'<a href="/admin">Comptes</a>':''}<button type="button" id="deco">Se déconnecter</button>`;
+  $('#deco').onclick=async()=>{await send('/deconnexion','POST',{});location.href='/'};
+});
+initMap();load();poll();setInterval(poll,2500);
+</script>
+</body>
+</html>

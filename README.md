@@ -15,6 +15,7 @@ pip install -r requirements.txt
 ```bash
 source .venv/bin/activate
 uvicorn app:app --port 8420
+# http://localhost:8420 : page d'accueil ; http://localhost:8420/app : l'application
 ```
 Puis ouvre http://localhost:8420. Au premier lien analysé via la video, ~3,5 Go de modeles sont telecharges.
 
@@ -79,6 +80,7 @@ Compter environ 1 min par lien quand la video doit etre analysee ; 15 s d'attent
 ## IA en ligne : OpenRouter (modeles gratuits)
 L'IA (lecture des legendes, des images et des resultats web) passe par les modeles gratuits d'OpenRouter :
 1. Cree une cle sur openrouter.ai, puis mets-la dans `data/openrouter.key` (ignore par git) ou dans la variable `OPENROUTER_API_KEY`.
+   Une 2e ligne dans ce fichier = une cle a part pour la transcription Whisper (payante), pour suivre sa depense separement.
 2. Lance normalement : `uvicorn app:app --port 8420` (ou `python bench/bench.py`). Sans cle, l'app previent au demarrage et n'utilise que les regles simples.
 - Modeles : ta liste (voir ci-dessous), avec en dernier `openrouter/free`, le routeur des modeles gratuits.
   Ordre d'essai : `modeles_openrouter.txt` (une ligne par modele). Un modele qui echoue (erreur, quota, reponse vide ou sans JSON) passe la main
@@ -92,4 +94,29 @@ L'IA (lecture des legendes, des images et des resultats web) passe par les model
   et les classe : restaurants trouves, adresses justes, fiches en trop, reponses utiles / vides / illisibles, temps par reponse.
   Rapport `bench/modeles.md`, historique `bench/modeles.csv`. `--appliquer` reecrit `modeles_openrouter.txt` dans l'ordre du classement ;
   `--modeles a,b` / `--cas tous` pour choisir. Environ 3 requetes par cas et par modele : surveille le quota de 1 000 par jour.
+- **Transcription** : par defaut `openai/whisper-large-v3` heberge par OpenRouter (payant mais minuscule : ~0,0005 $ par video,
+  chaque video n'est transcrite qu'une fois). Sans cle ou en cas d'echec : Whisper sur le Mac. `TP_TRANSCRIPTION=local` pour rester en local.
+  `python bench/transcriptions.py` compare les deux textes video par video.
 - Ce que tu envoies (legendes, transcriptions, images) part chez les fournisseurs des modeles : verifie leurs conditions dans les reglages de confidentialite d'OpenRouter.
+
+## Securite
+- L'app n'ecoute que ton Mac (`localhost`). Elle refuse les requetes venant d'un autre site ouvert dans ton navigateur, et les noms d'hote
+  inconnus (attaque par « rebinding DNS »). Pour l'ouvrir depuis ton telephone sur ton reseau : `TP_HOTES=192.168.x.x uvicorn app:app --host 0.0.0.0 --port 8420`
+  (attention : n'importe qui sur ce reseau pourra alors l'utiliser).
+- Seuls les liens YouTube, Instagram et TikTok sont analyses. Les pages web lues pour trouver une adresse doivent etre publiques :
+  jamais ta box, ton reseau local ou ton Mac, redirections comprises.
+- Les cles restent dans `data/` (ignore par git). Protege le fichier : `chmod 600 data/openrouter.key`.
+
+## Comptes
+- Pages : `/` accueil, `/connexion` (se connecter ou creer un compte), `/app` l'application, `/admin` la gestion des comptes (admins seulement).
+- Inscription libre (pseudo, e-mail, mot de passe de 12 caracteres minimum avec majuscules, minuscules, chiffres et caracteres speciaux). **Le tout premier compte cree devient admin** et recupere
+  les restaurants enregistres avant l'arrivee des comptes.
+- Chacun sa liste : un compte ne voit et ne modifie que ses restaurants. Une video deja analysee pour un compte est relue depuis le cache
+  pour un autre (aucune IA relancee).
+- **Autour de moi** (`/autour`, lien dans le bandeau) : tes restaurants du plus proche au plus loin, sur une carte, avec un rayon (1 km, 5 km, 20 km, tout)
+  et un bouton Itineraire. La position vient du navigateur (https ou localhost obligatoire) ; si elle est refusee, un clic sur la carte choisit le point.
+- **Partager une fiche** : bouton « Partager » sur une fiche, puis le pseudo du destinataire. Il recoit une copie (marquee « de <pseudo> »),
+  sans ta note perso ; chacun peut ensuite modifier la sienne sans toucher a l'autre.
+- L'admin peut passer un compte en admin ou en utilisateur, et supprimer un compte (avec ses restaurants). Il reste toujours au moins un admin.
+- Mots de passe haches avec scrypt (jamais enregistres en clair) ; session dans un cookie `HttpOnly` de 30 jours ;
+  5 essais de connexion rates (par identifiant ou adresse IP) = 15 minutes de pause.

@@ -8,7 +8,9 @@ os.environ["TP_DATA"] = tempfile.mkdtemp(prefix="tp-test-")  # avant d'importer 
 import uvicorn
 import app as server
 import pipeline
-pipeline.or_cle = lambda: os.environ.get("OPENROUTER_API_KEY", "")  # jamais ta vraie cle (data/openrouter.key) pendant les tests
+VRAIES_CLES = pipeline.or_cles
+pipeline.TRANSCRIPTION = "local"  # les tests de transcription en ligne le reglent eux-memes
+pipeline.or_cles = lambda: [k for k in os.environ.get("OPENROUTER_API_KEY", "").split(",") if k]  # jamais tes vraies cles pendant les tests
 pipeline.WEB_REESSAI = 0
 LIT_IMAGES = pipeline.lit_images  # la vraie (les tests OpenRouter la remplacent)
 
@@ -701,6 +703,32 @@ class OpenRouter(unittest.TestCase):  # IA en ligne (modeles gratuits) ; sans el
                 pipeline.ask_openrouter("lis", (), 300)
         self.assertEqual(pipeline.STATS["quota_jour"], 1)
 
+    def test_deuxieme_cle_pour_la_transcription(self):  # ligne 1 : IA ; ligne 2 : Whisper (payant), depense suivie a part
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "cle-ia,cle-whisper"}):
+            self.assertEqual((pipeline.or_cle(), pipeline.or_cle("transcription")), ("cle-ia", "cle-whisper"))
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "seule"}):
+            self.assertEqual(pipeline.or_cle("transcription"), "seule")
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x")
+        cles = []
+
+        def run(cmd, *a, **k):
+            if str(cmd[0]) == "ffmpeg":
+                pathlib.Path(str(cmd[-1])).write_bytes(b"audio")
+            return mock.Mock(stdout="")
+
+        def urlopen(req, timeout=None):
+            cles.append(req.get_header("Authorization"))
+            return mock.Mock(read=lambda: json.dumps({"text": "bonjour"}).encode())
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "cle-ia,cle-whisper"}), mock.patch.object(pipeline, "TRANSCRIPTION", "openrouter:openai/whisper-large-v3"), \
+             mock.patch.object(pipeline, "run", run), mock.patch("urllib.request.urlopen", urlopen):
+            pipeline.transcription(d, lambda s: None)
+        self.assertEqual(cles, ["Bearer cle-whisper"])
+
+    def test_fichier_une_cle_par_ligne(self):
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "openrouter.key").write_text("sk-or-1\nsk-or-2\n\n")
+        with mock.patch.object(pipeline, "DATA", d), mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}):
+            self.assertEqual(VRAIES_CLES(), ["sk-or-1", "sk-or-2"])
+
     def test_json_ok(self):
         self.assertEqual(pipeline.json_ok('Voici :\n```json\n[{"nom": "A"}]\n```'), [{"nom": "A"}])
         self.assertEqual(pipeline.json_ok("[]"), [])
@@ -734,6 +762,69 @@ class OpenRouter(unittest.TestCase):  # IA en ligne (modeles gratuits) ; sans el
              mock.patch("urllib.request.urlopen", lambda req, timeout=None: mock.Mock(read=lambda: json.dumps(cat).encode())):
             f = LIT_IMAGES
             self.assertEqual((f("g/vision:free"), f("t/texte:free"), f("inconnu:free")), (True, False, None))
+
+    def test_transcription_par_openrouter(self):  # TP_TRANSCRIPTION=openrouter:<modele qui ecoute>
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x")
+        envoye = []
+
+        def run(cmd, *a, **k):
+            cmd = [str(c) for c in cmd]
+            if cmd[0] == "ffmpeg":
+                pathlib.Path(cmd[-1]).write_bytes(b"audio")
+            if "mlx_whisper" in cmd[0]:
+                raise AssertionError("pas de Whisper local")
+            return mock.Mock(stdout="")
+
+        def urlopen(req, timeout=None):
+            envoye.append(json.loads(req.data))
+            return mock.Mock(read=lambda: json.dumps({"choices": [{"message": {"content": "On va chez Isshin Ramen à Bordeaux"}}]}).encode())
+        with mock.patch.object(pipeline, "TRANSCRIPTION", "openrouter:nvidia/omni:free"), mock.patch.object(pipeline, "run", run), \
+             mock.patch("urllib.request.urlopen", urlopen):
+            self.assertEqual(pipeline.transcription(d, lambda s: None), "On va chez Isshin Ramen à Bordeaux")
+        partie = envoye[0]["messages"][0]["content"][1]
+        self.assertEqual((envoye[0]["model"], partie["type"], partie["input_audio"]["format"]), ("nvidia/omni:free", "input_audio", "mp3"))
+        self.assertTrue((d / "a.openrouter_nvidia_omni_free.txt").exists())  # gardee : pas retranscrite la prochaine fois
+
+    def test_whisper_heberge_point_d_acces_dedie(self):  # openai/whisper-large-v3 : /audio/transcriptions -> {"text": ...}
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x")
+        envoye = []
+
+        def run(cmd, *a, **k):
+            cmd = [str(c) for c in cmd]
+            if cmd[0] == "ffmpeg":
+                pathlib.Path(cmd[-1]).write_bytes(b"audio")
+            return mock.Mock(stdout="")
+
+        def urlopen(req, timeout=None):
+            envoye.append((req.full_url, json.loads(req.data)))
+            return mock.Mock(read=lambda: json.dumps({"text": "on va chez Slak"}).encode())
+        with mock.patch.object(pipeline, "TRANSCRIPTION", "openrouter:openai/whisper-large-v3"), mock.patch.object(pipeline, "run", run), \
+             mock.patch("urllib.request.urlopen", urlopen):
+            self.assertEqual(pipeline.transcription(d, lambda s: None), "on va chez Slak")
+        url, corps = envoye[0]
+        self.assertTrue(url.endswith("/api/v1/audio/transcriptions"))
+        self.assertEqual((corps["model"], corps["input_audio"]["format"]), ("openai/whisper-large-v3", "wav"))
+
+    def test_langue_probable(self):  # tokyo-5 : video en francais, Whisper l'avait prise pour du norvegien et traduite
+        self.assertEqual(pipeline.langue_probable("5 adresses à ne pas manquer à Tokyo 🇯🇵 #tokyo #japon"), "fr")
+        self.assertEqual(pipeline.langue_probable("Le resto japonais le plus immersif de Bordeaux"), "fr")
+        self.assertIsNone(pipeline.langue_probable("Best crepes in Osaka you have to try [Crepe & Espresso]"))
+        self.assertIsNone(pipeline.langue_probable(""))
+
+    def test_transcription_openrouter_en_panne_whisper_local(self):
+        d = pathlib.Path(tempfile.mkdtemp()); (d / "video.mp4").write_bytes(b"x")
+
+        def run(cmd, *a, **k):
+            cmd = [str(c) for c in cmd]
+            if cmd[0] == "ffmpeg":
+                pathlib.Path(cmd[-1]).write_bytes(b"audio")
+            if "mlx_whisper" in cmd[0]:
+                (d / "a.txt").write_text("transcrit en local")
+            return mock.Mock(stdout="")
+        err = urllib.error.HTTPError(pipeline.OR_URL, 400, "audio non pris en charge", {}, None)
+        with mock.patch.object(pipeline, "TRANSCRIPTION", "openrouter:nvidia/omni:free"), mock.patch.object(pipeline, "run", run), \
+             mock.patch("urllib.request.urlopen", side_effect=err):
+            self.assertEqual(pipeline.transcription(d, lambda s: None), "transcrit en local")
 
     @unittest.skipUnless(__import__("shutil").which("ffmpeg"), "ffmpeg absent")
     def test_images_reparties_sur_la_video(self):
@@ -806,7 +897,7 @@ class Toulouse(unittest.TestCase):  # « Les Thermes Kongfu Pâtes » : la 1re r
 
 class PageWeb(unittest.TestCase):  # l'adresse n'est pas dans l'extrait de recherche, mais dans la page
     def page(self, contenu):
-        return mock.patch("urllib.request.urlopen", lambda req, timeout=None: mock.Mock(read=lambda n=None: contenu.encode()))
+        return mock.patch.object(pipeline, "ouvrir_page_publique", lambda url, **k: contenu)
 
     def test_texte_de_la_page(self):
         with self.page("<html><h1>LES THERMES KONGFU PÂTE</h1><p>Restauration</p><p>2 Rue Castellane 31000 TOULOUSE</p><p>07 69 65 38 88</p></html>"):
@@ -829,6 +920,37 @@ class Hashtags(unittest.TestCase):  # « Bonne adresse à Toulouse - Dozo 📍 #
         self.assertEqual(p["adresses"], [])
         self.assertNotIn("#", p["nom"] or "")
         self.assertEqual(pipeline.parse_caption("📍 12 rue de Metz, Toulouse #food")["adresses"], ["12 rue de Metz, Toulouse"])
+
+
+class Securite(unittest.TestCase):
+    def ips(self, *adresses):
+        return mock.patch("socket.getaddrinfo", lambda h, p, *a, **k: [(2, 1, 6, "", (ip, 0)) for ip in adresses])
+
+    def test_pages_du_reseau_local_jamais_ouvertes(self):
+        with self.ips("93.184.216.34"):
+            self.assertTrue(pipeline.est_public("https://www.tourisme-occitanie.com/fiche"))
+        for ip in ("127.0.0.1", "192.168.1.1", "10.0.0.5", "169.254.169.254", "::1", "fd00::1"):
+            with self.ips(ip):
+                self.assertFalse(pipeline.est_public("https://piege.example/x"), ip)
+        with self.ips("93.184.216.34", "127.0.0.1"):  # un nom qui pointe aussi vers le Mac
+            self.assertFalse(pipeline.est_public("https://piege.example/x"))
+        for url in ("file:///etc/passwd", "ftp://a.fr/x", "https://a.fr:8420/api/places", "https://moi:mdp@a.fr/"):
+            self.assertFalse(pipeline.est_public(url), url)
+        with self.ips("127.0.0.1"):
+            self.assertIsNone(pipeline.adresse_page("http://piege.example/", "Dozo", "Toulouse"))
+
+    def test_redirection_vers_le_reseau_local_refusee(self):
+        h = pipeline._RedirectionPublique()
+        with self.ips("192.168.1.1"), self.assertRaises(urllib.error.HTTPError):
+            h.redirect_request(urllib.request.Request("https://a.fr/"), None, 302, "Found", {}, "http://box.local/")
+
+    def test_seuls_youtube_instagram_tiktok(self):
+        for url in ("https://www.youtube.com/shorts/fx9w0BFrpDM", "https://youtu.be/fx9w0BFrpDM", "https://www.instagram.com/reel/DcYC7U8t8Gl/",
+                    "https://vm.tiktok.com/ZMabc/", "https://www.tiktok.com/@x/video/123"):
+            self.assertTrue(pipeline.lien_video_accepte(url), url)
+        for url in ("http://192.168.1.1/admin", "http://localhost:8420/api/places", "https://youtube.com.piege.fr/x", "https://pasyoutube.com/x",
+                    "https://www.youtube.com:8080/x", "file:///etc/passwd"):
+            self.assertFalse(pipeline.lien_video_accepte(url), url)
 
 
 class EnPassant(unittest.TestCase):  # seulement les restaurants que la video presente
@@ -894,11 +1016,24 @@ class Api(unittest.TestCase):
         pipeline.NOMINATIM_DELAY = 0
         p = mock.patch("urllib.request.urlopen", fake_nominatim); p.start(); self.addCleanup(p.stop)
         with server.db() as c:
-            c.execute("delete from places"); c.execute("delete from jobs")
+            for t in ("places", "jobs", "users", "sessions", "echecs"):
+                c.execute(f"delete from {t}")
+        self.cookie = None
+        self.cookie = self.inscrire("benjamin", "ben@exemple.fr")  # 1er compte : admin ; les tests parlent en son nom
 
-    def call(self, method, path, body=None):
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
+    def inscrire(self, pseudo, email, mdp="Motdepasse-Solide1"):
+        return self.session("/inscription", {"pseudo": pseudo, "email": email, "mdp": mdp})
+
+    def session(self, route, corps):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api{route}", method="POST", data=json.dumps(corps).encode(),
                                      headers={"Content-Type": "application/json"})
+        with REAL_URLOPEN(req) as r:
+            return r.headers["Set-Cookie"].split(";")[0]
+
+    def call(self, method, path, body=None, cookie=...):
+        cookie = self.cookie if cookie is ... else cookie
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Content-Type": "application/json", **({"Cookie": cookie} if cookie else {})})
         try:
             with REAL_URLOPEN(req) as r:  # urlopen est simule pour Nominatim : on garde le vrai pour parler a notre serveur
                 return r.status, json.loads(r.read())
@@ -907,6 +1042,130 @@ class Api(unittest.TestCase):
 
     def places(self):
         return {p["id"]: p for p in self.call("GET", "/places")[1]}
+
+    def brut(self, method, path, data=b"", headers=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api{path}", method=method, data=data, headers=headers or {})
+        try:
+            with REAL_URLOPEN(req) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def page(self, chemin, cookie=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{chemin}", headers={"Cookie": cookie} if cookie else {})
+        with REAL_URLOPEN(req) as r:
+            return r.geturl(), r.read().decode()
+
+    def test_pages(self):  # / : page d'accueil ; /app : l'application (connecte) ; sinon la page de connexion
+        self.assertIn("Tu as vu le resto en vidéo", self.page("/")[1])
+        self.assertIn('id="map"', self.page("/app", self.cookie)[1])
+        url, html = self.page("/app")
+        self.assertTrue(url.endswith("/connexion?suite=/app")); self.assertIn("Créer un compte", html)
+        self.assertIn("Comptes", self.page("/admin", self.cookie)[1])
+        self.assertIn("Autour de moi", self.page("/autour", self.cookie)[1])  # page « Autour de moi » (connecte)
+        self.assertTrue(self.page("/autour")[0].endswith("/connexion?suite=/autour"))  # sinon : connexion, puis retour sur la page
+        self.assertIn('href="/autour"', self.page("/app", self.cookie)[1])  # lien depuis la liste
+        simple = self.inscrire("lea", "lea@exemple.fr")
+        self.assertTrue(self.page("/admin", simple)[0].endswith("/app"))  # un utilisateur n'a pas acces a la page admin
+        with REAL_URLOPEN(f"http://127.0.0.1:{self.port}/") as r:
+            self.assertIn('href="/app"', r.read().decode())  # le bouton « Lancer Travelpoint » ouvre l'app
+
+    def test_comptes_et_roles(self):
+        self.assertEqual(self.call("GET", "/moi")[1], {"pseudo": "benjamin", "email": "ben@exemple.fr", "role": "admin"})
+        self.assertEqual(self.call("GET", "/places", cookie=None)[0], 401)  # sans compte : rien
+        lea = self.inscrire("lea", "Lea@Exemple.fr")
+        self.assertEqual(self.call("GET", "/moi", cookie=lea)[1]["role"], "user")  # seul le 1er compte est admin
+        self.assertEqual(self.call("POST", "/inscription", {"pseudo": "LEA", "email": "autre@exemple.fr", "mdp": "Motdepasse-Solide1"}, cookie=None)[0], 409)
+        self.assertEqual(self.call("POST", "/inscription", {"pseudo": "x", "email": "pas-un-mail", "mdp": "court"}, cookie=None)[0], 422)
+        # chacun sa liste
+        pid = self.call("POST", "/places", {"nom": "Chez Ben", "ville": "Marseille"})[1]["id"]
+        self.assertEqual(self.call("GET", "/places", cookie=lea)[1], [])
+        self.assertEqual(self.call("PATCH", f"/places/{pid}", {"nom": "vole"}, cookie=lea)[0], 404)
+        self.call("DELETE", f"/places/{pid}", cookie=lea)
+        self.assertEqual([p["nom"] for p in self.places().values()], ["Chez Ben"])  # toujours la
+        # administration
+        self.assertEqual(self.call("GET", "/admin/comptes", cookie=lea)[0], 403)
+        comptes = {c["pseudo"]: c for c in self.call("GET", "/admin/comptes")[1]}
+        self.assertEqual((comptes["benjamin"]["restaurants"], comptes["lea"]["email"]), (1, "lea@exemple.fr"))
+        self.assertNotIn("hash", comptes["lea"])
+        self.assertEqual(self.call("PATCH", f"/admin/comptes/{comptes['benjamin']['id']}", {"role": "user"})[0], 400)  # dernier admin
+        self.assertEqual(self.call("PATCH", f"/admin/comptes/{comptes['lea']['id']}", {"role": "admin"})[0], 200)
+        self.assertEqual(self.call("GET", "/admin/comptes", cookie=lea)[0], 200)
+        self.assertEqual(self.call("DELETE", f"/admin/comptes/{comptes['lea']['id']}")[0], 200)
+        self.assertEqual(self.call("GET", "/moi", cookie=lea)[0], 401)  # compte supprime : session fermee
+
+    def test_partage(self):  # une copie de la fiche, sans la note perso ; chacun garde ensuite la sienne
+        lea = self.inscrire("lea", "lea@exemple.fr")
+        pid = self.call("POST", "/places", {"nom": "Dozo", "adresse": "13 Rue d'Alsace Lorraine, Toulouse", "lat": 43.6, "lon": 1.44})[1]["id"]
+        self.call("PATCH", f"/places/{pid}", {"note": "privee", "done": True})
+        self.assertEqual(self.call("POST", f"/places/{pid}/partager", {"pseudo": "@LEA"}), (200, {"ok": True, "pseudo": "lea"}))
+        recu = self.call("GET", "/places", cookie=lea)[1]
+        self.assertEqual([(p["nom"], p["partage_par"], p["note"], p["done"]) for p in recu], [("Dozo", "benjamin", "", False)])
+        self.assertEqual(self.call("POST", f"/places/{pid}/partager", {"pseudo": "lea"})[0], 409)  # deja chez elle
+        self.assertEqual(self.call("POST", f"/places/{pid}/partager", {"pseudo": "inconnu"})[0], 404)
+        self.assertEqual(self.call("POST", f"/places/{pid}/partager", {"pseudo": "benjamin"})[0], 400)  # soi-meme
+        self.assertEqual(self.call("POST", f"/places/{pid}/partager", {"pseudo": "benjamin"}, cookie=lea)[0], 404)  # pas sa fiche
+        self.call("PATCH", f"/places/{recu[0]['id']}", {"nom": "Dozo Izakaya"}, cookie=lea)
+        self.assertEqual(self.places()[pid]["nom"], "Dozo")  # sa modification ne touche pas l'original
+
+    def test_liste_des_comptes_pour_partager(self):  # pseudos seulement, jamais les e-mails ; sans soi-meme ; recherche
+        for p, e in (("lea", "lea@exemple.fr"), ("leon", "leon@exemple.fr"), ("alexandre", "alex@exemple.fr")):
+            self.inscrire(p, e)
+        self.assertEqual(self.call("GET", "/utilisateurs")[1], ["alexandre", "lea", "leon"])
+        self.assertEqual(self.call("GET", "/utilisateurs?q=LE")[1], ["lea", "leon", "alexandre"])  # « le… » d'abord, puis « …le… »
+        self.assertEqual(self.call("GET", "/utilisateurs?q=%25")[1], [])  # % pris a la lettre
+        self.assertEqual(self.call("GET", "/utilisateurs", cookie=None)[0], 401)
+
+    def test_mot_de_passe_complexe(self):  # 12 caracteres, majuscule, minuscule, chiffre, caractere special
+        for mdp, manque in (("Court-1a", "12 caracteres"), ("motdepasse-solide1", "majuscule"), ("MOTDEPASSE-SOLIDE1", "minuscule"),
+                            ("Motdepasse-Solide", "chiffre"), ("MotdepasseSolide1", "special")):
+            code, rep = self.call("POST", "/inscription", {"pseudo": "zoe", "email": "zoe@exemple.fr", "mdp": mdp}, cookie=None)
+            self.assertEqual(code, 422, mdp); self.assertIn(manque, json.dumps(rep, ensure_ascii=False), mdp)
+        self.assertTrue(self.inscrire("zoe", "zoe@exemple.fr", "Tr4vel-point!"))
+
+    def test_mot_de_passe(self):
+        with server.db() as c:
+            h = c.execute("select hash from users").fetchone()[0]
+        self.assertNotIn("Motdepasse-Solide1", h); self.assertTrue(h.startswith("scrypt$"))
+        self.assertTrue(self.session("/connexion", {"identifiant": "BEN@exemple.fr", "mdp": "Motdepasse-Solide1"}).startswith("tp_session="))
+        self.assertTrue(self.session("/connexion", {"identifiant": "benjamin", "mdp": "Motdepasse-Solide1"}))  # pseudo aussi
+        codes = [self.call("POST", "/connexion", {"identifiant": "benjamin", "mdp": "faux"}, cookie=None)[0] for _ in range(6)]
+        self.assertEqual(codes, [401] * 5 + [429])  # 5 essais rates : pause de 15 min
+        self.assertEqual(self.call("POST", "/connexion", {"identifiant": "personne", "mdp": "x"}, cookie=None)[0], 429)  # meme adresse IP
+
+    def test_deconnexion(self):
+        self.call("POST", "/deconnexion", {})
+        self.assertEqual(self.call("GET", "/places")[0], 401)
+
+    def test_meme_video_deux_comptes(self):  # deux comptes, une seule analyse par l'IA ; chacun recoit ses fiches
+        n = []
+
+        def analyse(url, progress):
+            n.append(url)
+            return [pipeline.fiche(nom="Dozo", adresse="13 Rue d'Alsace Lorraine, Toulouse", lat=43.6, lon=1.44, confiance="moyenne", source="legende")]
+        lea = self.inscrire("lea", "lea@exemple.fr")
+        with mock.patch.object(pipeline, "analyze", side_effect=analyse):
+            url = "https://www.youtube.com/shorts/1-i3Xcgpjlw"
+            self.call("POST", "/analyze", {"url": url}); self.wait_job()
+            self.assertFalse(self.call("POST", "/analyze", {"url": url}, cookie=lea)[1]["deja"])  # nouvelle pour Lea
+            for _ in range(100):
+                js = self.call("GET", "/jobs", cookie=lea)[1]
+                if js and js[0]["status"] == "done":
+                    break
+                time.sleep(0.05)
+        self.assertEqual([p["nom"] for p in self.call("GET", "/places", cookie=lea)[1]], ["Dozo"])
+        self.assertEqual(len(self.places()), 1)
+
+    def test_protections(self):
+        corps = json.dumps({"url": "https://www.youtube.com/shorts/Protection1"}).encode()
+        self.assertEqual(self.call("POST", "/analyze", {"url": "http://192.168.1.1/admin"})[0], 400)  # lien hors YouTube/Instagram/TikTok
+        self.assertEqual(self.brut("GET", "/places", None, {"Host": "piege.example"}), 403)  # rebinding DNS
+        self.assertEqual(self.brut("POST", "/analyze", corps, {"Content-Type": "application/json", "Origin": "https://piege.example"}), 403)  # autre site
+        self.assertEqual(self.brut("POST", "/analyze", corps, {"Content-Type": "text/plain"}), 415)  # formulaire / fetch sans permission
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/analyze", method="POST", data=corps)  # aucun Content-Type
+        req.remove_header("Content-type")
+        self.assertIn(self.brut("POST", "/analyze", corps, {"Content-Type": ""}), (415, 400))
+        self.assertEqual(self.brut("GET", "/places", None, {"Origin": "https://piege.example", "Cookie": self.cookie}), 200)  # lecture : le navigateur ne la donne pas a l'autre site
 
     def wait_job(self):
         for _ in range(100):
@@ -972,7 +1231,7 @@ class Api(unittest.TestCase):
         auto = lambda: [pipeline.fiche(nom="Resto Faux", adresse="1 rue A, Lille", lat=50.6, lon=3.0, confiance="a_verifier", source="legende"),
                         pipeline.fiche(nom="Autre", adresse="2 rue B, Lille", lat=50.7, lon=3.1, confiance="haute", source="legende")]
         with mock.patch.object(pipeline, "analyze", side_effect=lambda *a: auto()):
-            url = "https://exemple.test/video"
+            url = "https://www.youtube.com/shorts/ModifManuel"
             self.call("POST", "/analyze", {"url": url}); self.assertEqual(self.wait_job()["status"], "done")
             ids = {p["nom"]: i for i, p in self.places().items()}
             faux = ids["Resto Faux"]
@@ -1016,7 +1275,7 @@ class Api(unittest.TestCase):
 
     def test_cest_bon(self):
         with server.db() as c:
-            c.execute("insert into places(id,job_id,url,data,created) values('x','j','u',?,0)", (json.dumps(pipeline.fiche(nom="Flou", confiance="a_verifier")),))
+            c.execute("insert into places(id,job_id,url,data,created,user_id) values('x','j','u',?,0,(select id from users))", (json.dumps(pipeline.fiche(nom="Flou", confiance="a_verifier")),))
         self.call("PATCH", "/places/x", {"verifie": True})
         p = self.places()["x"]
         self.assertEqual((p["confiance"], p["modifie_manuellement"], p["nom"]), ("manuel", True, "Flou"))

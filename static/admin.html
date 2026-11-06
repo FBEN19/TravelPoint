@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comptes — Travelpoint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" crossorigin="anonymous">
+<style>
+:root{--pine:#1f4a3a;--pine-d:#153429;--pine-m:#4f7565;--pine-l:#e3ece6;--paper:#f6f2e8;--card:#fcfaf4;--line:#ddd5c2;--ink:#1d2a24;--muted:#545e58;--err:#9e2a1f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.5 Archivo,'Helvetica Neue',Arial,sans-serif}
+:focus-visible{outline:3px solid var(--pine);outline-offset:2px}
+.bandeau{background:var(--pine);color:var(--paper)}
+.bandeau>div{max-width:1040px;margin:0 auto;padding:16px 24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.logo{display:inline-flex;align-items:center;gap:10px;color:var(--paper);text-decoration:none;font-weight:800;font-stretch:80%;font-size:24px;line-height:1;letter-spacing:-.01em}
+.bandeau nav{margin-left:auto}
+.bandeau nav a{color:var(--paper);font-weight:700;text-underline-offset:4px}
+.wrap{max-width:1040px;margin:0 auto;padding:40px 24px 72px;display:flex;flex-direction:column;gap:24px}
+h1{margin:0;font-weight:800;font-stretch:68%;font-size:clamp(44px,7vw,76px);line-height:.95;letter-spacing:-.01em;color:var(--pine)}
+.sous{margin:-8px 0 0;color:var(--muted);max-width:52ch}
+.boite{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:680px}
+th,td{text-align:left;padding:14px 18px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:14px;font-weight:700;color:var(--muted);background:var(--pine-l)}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:#f6f3ea}
+select{font:inherit;padding:8px 10px;border:1.5px solid var(--line);border-radius:8px;background:#fff;min-height:42px;cursor:pointer}
+.suppr{font:inherit;font-weight:700;color:var(--err);background:none;border:1.5px solid var(--line);border-radius:8px;padding:8px 14px;min-height:42px;cursor:pointer}
+.suppr:hover{border-color:var(--err);background:#fbeeea}
+button .bi{pointer-events:none;margin-right:6px}
+.moi{font-size:13.5px;color:var(--muted)}
+.erreur{color:var(--err);font-weight:700;margin:0}
+.erreur:empty{display:none}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="bandeau"><div>
+  <a class="logo" href="/" aria-label="Travelpoint, accueil">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>
+    Travelpoint
+  </a>
+  <nav><a href="/app">Retour à l’app</a></nav>
+</div></div>
+<div class="wrap">
+  <h1>Comptes</h1>
+  <p class="erreur" role="alert" id="erreur"></p>
+  <div class="boite">
+    <table>
+      <thead><tr><th scope="col">Pseudo</th><th scope="col">E-mail</th><th scope="col">Rôle</th><th scope="col">Restaurants</th><th scope="col">Créé le</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+      <tbody id="lignes"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const msg=d=>Array.isArray(d)?d.map(x=>x.msg).join('\n'):d||'Erreur';
+const api=(p,o)=>fetch('/api'+p,o).then(async r=>{if(r.status===401)location.href='/connexion?suite=/admin';if(!r.ok)throw msg((await r.json().catch(()=>({}))).detail);return r.json()});
+const send=(p,method,body)=>api(p,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+let moi=null;
+async function charger(){
+  const comptes=await api('/admin/comptes');
+  document.getElementById('lignes').innerHTML=comptes.map(c=>`<tr>
+    <td><strong>${esc(c.pseudo)}</strong>${moi&&c.pseudo===moi.pseudo?' <span class="moi">(toi)</span>':''}</td>
+    <td>${esc(c.email)}</td>
+    <td><label><span class="sr">Rôle de ${esc(c.pseudo)}</span><select data-role="${esc(c.id)}">
+      <option value="user" ${c.role==='user'?'selected':''}>Utilisateur</option>
+      <option value="admin" ${c.role==='admin'?'selected':''}>Admin</option></select></label></td>
+    <td>${Number(c.restaurants)||0}</td>
+    <td>${new Date(c.created*1000).toLocaleDateString('fr-FR')}</td>
+    <td><button class="suppr" data-suppr="${esc(c.id)}" data-pseudo="${esc(c.pseudo)}"><i class="bi bi-trash3" aria-hidden="true"></i>Supprimer</button></td></tr>`).join('');
+}
+document.addEventListener('change',async e=>{
+  const id=e.target.dataset.role;if(!id)return;
+  try{await send('/admin/comptes/'+encodeURIComponent(id),'PATCH',{role:e.target.value});document.getElementById('erreur').textContent=''}
+  catch(x){document.getElementById('erreur').textContent=x}
+  await charger();
+});
+document.addEventListener('click',async e=>{
+  const id=e.target.dataset.suppr;if(!id)return;
+  if(!confirm(`Supprimer le compte « ${e.target.dataset.pseudo} » et tous ses restaurants ?\n\nCette action est définitive.`))return;
+  try{await api('/admin/comptes/'+encodeURIComponent(id),{method:'DELETE'});document.getElementById('erreur').textContent=''}
+  catch(x){document.getElementById('erreur').textContent=x}
+  await charger();
+});
+api('/moi').then(m=>{moi=m;return charger()}).catch(x=>document.getElementById('erreur').textContent=x);
+</script>
+</body>
+</html>

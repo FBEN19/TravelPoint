@@ -2,7 +2,7 @@
 Texte d'abord (legende + OpenStreetMap), video (Whisper en local pour la voix + images lues par OpenRouter) seulement si besoin.
 Tout tourne en local ; un dossier de travail par lien (cache) dans data/jobs/<hash>/.
 """
-import base64, difflib, html, hashlib, json, os, pathlib, re, subprocess, sys, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
+import base64, difflib, html, ipaddress, socket, hashlib, json, os, pathlib, re, subprocess, sys, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 
 BIN = pathlib.Path(sys.executable).parent  # binaires du venv (yt-dlp, mlx_whisper)
 os.environ["PATH"] += os.pathsep + "/opt/homebrew/bin" + os.pathsep + "/usr/local/bin"  # ffmpeg (brew)
@@ -60,6 +60,47 @@ def canon(url):
     keep = sorted((k, v[0]) for k, v in q.items() if not TRACKING.match(k))  # autre site : on retire seulement les parametres de suivi
     propre = f"https://{host}{path.rstrip('/')}" + ("?" + urllib.parse.urlencode(keep) if keep else "")
     return "url:" + propre[8:].lower(), propre
+
+
+VIDEO_SITES = ("youtube.com", "youtu.be", "instagram.com", "tiktok.com")
+
+
+def lien_video_accepte(url):
+    """Seuls YouTube, Instagram et TikTok sont analyses : un lien vers un autre site (ou vers ton reseau local,
+    « http://192.168.1.1 ») ne doit jamais etre ouvert par yt-dlp depuis ton Mac."""
+    u = urllib.parse.urlparse((url or "").strip())
+    host = (u.hostname or "").lower()
+    return u.scheme in ("http", "https") and u.port in (None, 80, 443) and any(host == d or host.endswith("." + d) for d in VIDEO_SITES)
+
+
+def est_public(url):
+    """http(s), port standard, et un nom qui ne mene qu'a des adresses publiques d'Internet
+    (pas localhost, pas 192.168.x.x / 10.x.x.x, pas les adresses internes des fournisseurs de cloud)."""
+    u = urllib.parse.urlparse(url or "")
+    if u.scheme not in ("http", "https") or not u.hostname or u.port not in (None, 80, 443) or u.username or u.password:
+        return False
+    try:
+        ips = {a[4][0] for a in socket.getaddrinfo(u.hostname, None)}
+    except (OSError, UnicodeError):
+        return False
+    return bool(ips) and all(ipaddress.ip_address(ip.split("%")[0]).is_global for ip in ips)
+
+
+class _RedirectionPublique(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not est_public(newurl):  # une page publique qui renvoie vers ton reseau local : refusee
+            raise urllib.error.HTTPError(newurl, code, "redirection vers une adresse non publique refusee", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def ouvrir_page_publique(url, timeout=10, taille=600000):
+    """Ouvre une page trouvee sur le web (donc choisie par n'importe qui) seulement si elle est publique, redirections comprises."""
+    if not est_public(url):
+        raise ValueError("adresse non publique")
+    ouvreur = urllib.request.build_opener(_RedirectionPublique)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) Travelpoint", "Accept-Language": "fr,en"})
+    with ouvreur.open(req, timeout=timeout) as r:
+        return r.read(taille).decode("utf-8", "ignore")
 
 
 # ---------- telechargement (yt-dlp) ----------
@@ -366,10 +407,23 @@ OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 STATS = {"openrouter": 0, "echecs": 0, "quota_jour": 0}  # lectures reussies / echouees (affiche par le banc)
 
 
-def or_cle():
-    """Cle OpenRouter : variable OPENROUTER_API_KEY, ou fichier data/openrouter.key (jamais versionne : data/ est ignore par git)."""
+def or_cles():
+    """Cles OpenRouter, dans l'ordre : variable OPENROUTER_API_KEY (plusieurs separees par des virgules), ou fichier
+    data/openrouter.key, une cle par ligne (jamais versionne : data/ est ignore par git)."""
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        return [k.strip() for k in os.environ["OPENROUTER_API_KEY"].split(",") if k.strip()]
     fichiers = [DATA / "openrouter.key", pathlib.Path(__file__).resolve().parent / "data" / "openrouter.key"]  # (le banc a son propre dossier data)
-    return os.environ.get("OPENROUTER_API_KEY", "").strip() or next((f.read_text().strip() for f in fichiers if f.exists()), "")
+    f = next((f for f in fichiers if f.exists()), None)
+    return [l.strip() for l in f.read_text().splitlines() if l.strip() and not l.strip().startswith("#")] if f else []
+
+
+def or_cle(usage="ia"):
+    """Ligne 1 : l'IA (modeles gratuits). Ligne 2 : la transcription Whisper (payante), pour suivre sa depense a part ;
+    sans 2e ligne, la transcription utilise aussi la 1re cle."""
+    cles = or_cles()
+    if not cles:
+        return ""
+    return cles[1] if usage == "transcription" and len(cles) > 1 else cles[0]
 
 
 def or_modeles():
@@ -723,9 +777,8 @@ def adresse_page(url, nom, ville):
     if any(d in url for d in PAGES_FERMEES):
         return None  # pages qui bloquent les robots ou se chargent en JavaScript
     try:
-        brut = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) Travelpoint", "Accept-Language": "fr,en"}),
-                                      timeout=10).read(600000).decode("utf-8", "ignore")
-    except Exception:  # noqa
+        brut = ouvrir_page_publique(url)
+    except Exception:  # noqa : page injoignable, ou adresse non publique
         return None
     rue, cp = re.search(r'"streetAddress"\s*:\s*"([^"]{4,120})"', brut), re.search(r'"postalCode"\s*:\s*"([^"]{3,12})"', brut)
     texte = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", brut))))
@@ -899,21 +952,93 @@ def en_passant(nom, texte):
     return False
 
 
+# Transcription : "openrouter:<modele>" (Whisper heberge, ~0,0005 $ par video de 60 s ; repli sur Whisper local) ou "local"
+TRANSCRIPTION = os.environ.get("TP_TRANSCRIPTION", "openrouter:openai/whisper-large-v3-turbo")  # le meme modele qu'en local, ~0,0007 $ / video
+TRANSCRIRE_PROMPT = ("Transcris mot pour mot ce que disent les personnes dans cet audio, dans la langue parlee. Ecris les noms propres "
+                     "(restaurants, rues, villes, personnes) avec leur orthographe la plus probable. Reponds uniquement avec la transcription, sans commentaire.")
+
+
+MOTS_FR = {"le", "la", "les", "des", "du", "un", "une", "et", "est", "pour", "avec", "dans", "sur", "pas", "que", "qui", "tu", "on", "nous",
+           "vous", "c'est", "adresse", "adresses", "resto", "meilleur", "meilleure", "ici", "chez", "à", "où", "manger", "trop", "au", "aux",
+           "de", "en", "ce", "ça", "il", "elle", "ne", "se", "sa", "son", "ses", "plus", "très", "vient", "d'ouvrir", "mon", "ma", "mes", "ton", "ta"}
+
+
+def langue_probable(texte):
+    """« fr » si la legende est clairement en francais, sinon None (Whisper devine). Evite qu'une video en francais
+    avec des noms japonais soit prise pour du norvegien et TRADUITE."""
+    mots = re.findall(r"[a-zà-ÿ']+", (texte or "").lower())
+    n = sum(m in MOTS_FR for m in mots)
+    return "fr" if n >= 2 and n / len(mots) >= 0.08 else None
+
+
+def transcrire_openrouter(wav, modele, langue=None):
+    """L'audio (60 s max, 16 kHz mono) envoye a un modele OpenRouter qui sait ecouter -> texte. RuntimeError si echec."""
+    mp3 = pathlib.Path(wav).with_suffix(".mp3")
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-b:a", "48k", mp3])  # ~4 fois plus leger que le wav
+    if "whisper" in modele:  # Whisper recoit le son tel quel (wav 16 kHz, ~2 Mo) : la compression mp3 lui fait perdre des noms
+        audio = {"data": base64.b64encode(pathlib.Path(wav).read_bytes()).decode(), "format": "wav"}
+    else:
+        audio = {"data": base64.b64encode(mp3.read_bytes()).decode(), "format": "mp3"}
+    if "whisper" in modele:  # vrai modele de transcription : point d'acces dedie, renvoie {"text": ...}
+        url, corps = OR_URL.replace("/chat/completions", "/audio/transcriptions"), {"model": modele, "input_audio": audio, **({"language": langue} if langue else {})}
+    else:  # modele « omni » qui ecoute : on lui demande la transcription dans une conversation
+        url, corps = OR_URL, {"model": modele, "temperature": 0, "max_tokens": 3000, "reasoning": {"effort": "low"},
+                              "messages": [{"role": "user", "content": [{"type": "text", "text": TRANSCRIRE_PROMPT}, {"type": "input_audio", "input_audio": audio}]}]}
+    req = urllib.request.Request(url, data=json.dumps(corps).encode(), method="POST",
+                                 headers={"Authorization": f"Bearer {or_cle('transcription')}", "Content-Type": "application/json", "X-Title": "Travelpoint"})
+    st = st_modele(modele); st["appels"] += 1
+    try:
+        rep, duree = or_envoyer(req)
+    except urllib.error.HTTPError as e:
+        corps_err = getattr(e, "corps", "")
+        st["erreurs"] += 1; st["derniere_erreur"] = str(corps_err or e)[:150]
+        raise RuntimeError(f"transcription OpenRouter : {e}")
+    except Exception as e:  # noqa
+        st["erreurs"] += 1; st["derniere_erreur"] = str(getattr(e, "corps", "") or e)[:150]
+        raise RuntimeError(f"transcription OpenRouter : {e}")
+    texte = (rep.get("text") or ((rep.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+    if not texte:
+        st["vides"] += 1
+        raise RuntimeError(f"transcription OpenRouter vide : {str(rep.get('error') or '')[:150]}")
+    st["ok"] += 1; st["secondes"] += duree
+    return texte
+
+
+def transcription(wd, progress, langue=None):
+    """Paroles de la video, gardees par modele (a.<modele>.txt) : changer de modele ne perd pas les transcriptions de l'autre.
+    OpenRouter (TP_TRANSCRIPTION=openrouter:...) en panne : Whisper en local prend le relais."""
+    essais = ([TRANSCRIPTION] if TRANSCRIPTION.startswith("openrouter:") and or_cle() and os.environ.get("TP_LLM") != "0" else []) + [WHISPER]
+    for modele in essais:
+        slug = re.sub(r"[^\w.-]+", "_", modele)
+        f = wd / f"a.{slug}.txt"
+        if not f.exists() and (wd / "a.txt").exists() and (wd / "a.modele").exists() and (wd / "a.modele").read_text().strip() == modele:
+            f.write_text((wd / "a.txt").read_text())  # ancienne facon de ranger
+        if f.exists():
+            texte = f.read_text().strip()
+        else:
+            progress("Transcription de l'audio" + (f" ({modele.split(':', 1)[1]})" if modele.startswith("openrouter:") else ""))
+            try:
+                run(["ffmpeg", "-y", "-loglevel", "error", "-i", wd / "video.mp4", "-t", "60", "-vn", "-ac", "1", "-ar", "16000", wd / "a.wav"])
+                if modele.startswith("openrouter:"):
+                    texte = transcrire_openrouter(wd / "a.wav", modele.split(":", 1)[1], langue)
+                else:
+                    run([BIN / "mlx_whisper", wd / "a.wav", "--model", modele, "-f", "txt", "--output-dir", wd, *(["--language", langue] if langue else [])])
+                    texte = (wd / "a.txt").read_text().strip()
+            except RuntimeError as e:
+                trace("transcription_echec", modele=modele, raison=str(e)[:300])
+                continue  # modele suivant (Whisper en local)
+            f.write_text(texte)
+        trace("transcription", modele=modele, texte=texte[:600])
+        (wd / "a.txt").write_text(texte); (wd / "a.modele").write_text(modele)
+        return texte
+    return ""  # pas d'audio exploitable : images seules
+
+
 def video_stage(url, wd, cap, progress):
     if not (wd / "video.mp4").exists():
         progress("Telechargement de la video")
         ytdlp(url, "-f", "bv*[height<=480]+ba/b", "--merge-output-format", "mp4", "-o", str(wd / "video.%(ext)s"))
-    marque = wd / "a.modele"  # modele qui a fait la transcription : une transcription d'un autre modele est refaite
-    speech = (wd / "a.txt").read_text().strip() if (wd / "a.txt").exists() and marque.exists() and marque.read_text().strip() == WHISPER else ""
-    if not speech:
-        progress("Transcription de l'audio")
-        try:
-            run(["ffmpeg", "-y", "-loglevel", "error", "-i", wd / "video.mp4", "-t", "60", "-vn", "-ac", "1", "-ar", "16000", wd / "a.wav"])
-            run([BIN / "mlx_whisper", wd / "a.wav", "--model", WHISPER, "-f", "txt", "--output-dir", wd])
-            speech = (wd / "a.txt").read_text().strip()
-            marque.write_text(WHISPER)
-        except RuntimeError:
-            speech = ""  # pas d'audio exploitable : images seules
+    speech = transcription(wd, progress, langue_probable(cap))
     fmt = ('Reponds uniquement en JSON : [{"nom":"","adresse":"","ville":"","pays":""}] ou [] si aucun nom. '
            '"adresse" : numero et rue s\'ils sont dits, ecrits a l\'ecran ou dans la description, sinon "".')
     ctx = f"DESCRIPTION : {cap[:500]}\nPAROLES : {speech[:1800]}\n\n"
@@ -977,6 +1102,11 @@ def dedoublonne(fiches):
         if k not in vus:
             vus.add(k); out.append(f)
     return out
+
+
+def en_cache(url):
+    """Video deja analysee (par n'importe quel compte) : son resultat est relu sans IA ni telechargement."""
+    return (DATA / "jobs" / hashlib.sha1(canon(url)[0].encode()).hexdigest()[:10] / "result.json").exists()
 
 
 def forget(url):
